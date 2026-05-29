@@ -1,4 +1,4 @@
-# User Management Role
+# Role: vps.personalization.user_management
 
 ## 1. 概述
 本角色用于管理服务器上的管理级用户。它负责创建管理员用户、配置权限、设置密码、同步 root 用户的个性化配置，以及管理 root 用户密码。

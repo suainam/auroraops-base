@@ -1,4 +1,4 @@
-# Base Role
+# Role: vps.system.base
 
 ## 1. 概述
 本角色负责系统的基础通用配置，包括时区、字符编码、NTP 时间同步、DNS 解析以及针对不同介质（SSD/NVMe/HDD）的 I/O 调度器持久化优化。
