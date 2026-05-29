@@ -1,0 +1,209 @@
+---
+- name: Check user_management baseline for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ user_management_fact_path }}"
+  register: user_management_fact_stat
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Check admin user presence for rollback
+  become: true
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ admin_user }}"
+  register: user_management_admin_getent
+  failed_when: false
+  changed_when: false
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Check managed user_management paths for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ user_management_admin_home }}"
+    - "{{ user_management_admin_home }}/.ssh"
+    - "{{ user_management_admin_home }}/.ssh/authorized_keys"
+  register: user_management_rollback_path_stats
+  changed_when: false
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Parse managed artifact presence for rollback
+  ansible.builtin.set_fact:
+    user_management_managed_artifacts_present: "{{ (user_management_rollback_path_stats.results | selectattr('stat.exists', 'defined') | selectattr('stat.exists') | list | length) > 0 }}"
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Refuse rollback without baseline when managed artifacts remain
+  ansible.builtin.fail:
+    msg: "user_management baseline is missing while managed artifacts still exist"
+  when:
+    - not user_management_fact_stat.stat.exists
+    - (user_management_admin_getent.ansible_facts.getent_passwd is defined) or user_management_managed_artifacts_present
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: No managed user_management state to rollback
+  ansible.builtin.debug:
+    msg: "No user_management baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not user_management_fact_stat.stat.exists
+    - user_management_admin_getent.ansible_facts.getent_passwd is not defined
+    - not user_management_managed_artifacts_present
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Read user_management baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ user_management_fact_path }}"
+  register: user_management_fact_raw
+  when: user_management_fact_stat.stat.exists
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Parse user_management baseline for rollback
+  ansible.builtin.set_fact:
+    user_management_baseline: "{{ user_management_fact_raw.content | b64decode | from_json }}"
+  when: user_management_fact_stat.stat.exists
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Validate user_management baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - user_management_baseline.auroraops_managed | default(false) | bool
+      - user_management_baseline.version | default(0) | int >= 1
+      - user_management_baseline.admin_user == admin_user
+      - user_management_baseline.admin_home == user_management_admin_home
+      - user_management_baseline.admin_shell == user_management_shell
+      - user_management_baseline.admin_groups is defined
+      - user_management_baseline.pre_deploy_admin_exists is defined
+      - user_management_baseline.pre_deploy_admin_home is defined
+      - user_management_baseline.pre_deploy_admin_shell is defined
+      - user_management_baseline.pre_deploy_admin_groups is defined
+      - user_management_baseline.pre_deploy_admin_password_hash is defined
+      - user_management_baseline.pre_deploy_root_password_hash is defined
+      - user_management_baseline.pre_deploy_home_state is defined
+      - user_management_baseline.pre_deploy_ssh_dir_state is defined
+      - user_management_baseline.pre_deploy_authorized_keys_state is defined
+    fail_msg: "user_management baseline content is invalid for rollback"
+  when: user_management_fact_stat.stat.exists
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Restore root password hash
+  become: true
+  ansible.builtin.user:
+    name: root
+    password: "{{ user_management_baseline.pre_deploy_root_password_hash }}"
+    update_password: always
+  when:
+    - user_management_fact_stat.stat.exists
+    - user_management_baseline.pre_deploy_root_password_hash | length > 0
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Restore pre-deploy admin account
+  become: true
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    state: present
+    home: "{{ user_management_baseline.pre_deploy_admin_home }}"
+    shell: "{{ user_management_baseline.pre_deploy_admin_shell }}"
+    groups: "{{ ((user_management_baseline.pre_deploy_admin_groups | default([])) | join(',')) if ((user_management_baseline.pre_deploy_admin_groups | default([])) | length > 0) else omit }}"
+    append: false
+    create_home: false
+    password: "{{ user_management_baseline.pre_deploy_admin_password_hash if (user_management_baseline.pre_deploy_admin_password_hash | length > 0) else omit }}"
+    update_password: always
+  when:
+    - user_management_fact_stat.stat.exists
+    - user_management_baseline.pre_deploy_admin_exists | default(false)
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Remove admin user when absent before deploy
+  become: true
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    state: absent
+    remove: true
+    force: true
+  when:
+    - user_management_fact_stat.stat.exists
+    - not (user_management_baseline.pre_deploy_admin_exists | default(false))
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Restore admin home metadata
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}"
+    state: directory
+    owner: "{{ user_management_baseline.pre_deploy_home_state.owner }}"
+    group: "{{ user_management_baseline.pre_deploy_home_state.group }}"
+    mode: "{{ user_management_baseline.pre_deploy_home_state.mode }}"
+  when:
+    - user_management_fact_stat.stat.exists
+    - user_management_baseline.pre_deploy_admin_exists | default(false)
+    - user_management_baseline.pre_deploy_home_state.exists | default(false)
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Remove admin home created by deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}"
+    state: absent
+  when:
+    - user_management_fact_stat.stat.exists
+    - not (user_management_baseline.pre_deploy_home_state.exists | default(false))
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Restore admin .ssh directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}/.ssh"
+    state: directory
+    owner: "{{ user_management_baseline.pre_deploy_ssh_dir_state.owner }}"
+    group: "{{ user_management_baseline.pre_deploy_ssh_dir_state.group }}"
+    mode: "{{ user_management_baseline.pre_deploy_ssh_dir_state.mode }}"
+  when:
+    - user_management_fact_stat.stat.exists
+    - user_management_baseline.pre_deploy_admin_exists | default(false)
+    - user_management_baseline.pre_deploy_ssh_dir_state.exists | default(false)
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Remove admin .ssh directory created by deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}/.ssh"
+    state: absent
+  when:
+    - user_management_fact_stat.stat.exists
+    - not (user_management_baseline.pre_deploy_ssh_dir_state.exists | default(false))
+    - user_management_baseline.pre_deploy_admin_exists | default(false)
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Restore admin authorized_keys content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ user_management_admin_home }}/.ssh/authorized_keys"
+    content: "{{ user_management_baseline.pre_deploy_authorized_keys_state.content }}"
+    owner: "{{ user_management_baseline.pre_deploy_authorized_keys_state.owner }}"
+    group: "{{ user_management_baseline.pre_deploy_authorized_keys_state.group }}"
+    mode: "{{ user_management_baseline.pre_deploy_authorized_keys_state.mode }}"
+  when:
+    - user_management_fact_stat.stat.exists
+    - user_management_baseline.pre_deploy_admin_exists | default(false)
+    - user_management_baseline.pre_deploy_authorized_keys_state.exists | default(false)
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Remove admin authorized_keys created by deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}/.ssh/authorized_keys"
+    state: absent
+  when:
+    - user_management_fact_stat.stat.exists
+    - user_management_baseline.pre_deploy_admin_exists | default(false)
+    - not (user_management_baseline.pre_deploy_authorized_keys_state.exists | default(false))
+  tags: [rollback, personalization, user_management, phase2]
+
+- name: Remove user_management baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_fact_path }}"
+    state: absent
+  when: user_management_fact_stat.stat.exists
+  tags: [rollback, personalization, user_management, phase2]

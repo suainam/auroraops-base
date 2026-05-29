@@ -1,0 +1,76 @@
+---
+- name: Check if already joined network
+  become: yes
+  ansible.builtin.command: zerotier-cli listnetworks
+  register: zerotier_networks
+  changed_when: false
+  check_mode: false
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Join ZeroTier network
+  become: yes
+  ansible.builtin.command: "zerotier-cli join {{ zerotier_network_id }}"
+  when: 
+    - zerotier_network_id | length > 0
+    - zerotier_network_id not in zerotier_networks.stdout
+  register: zerotier_join_result
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Get ZeroTier Node ID
+  become: yes
+  ansible.builtin.command: zerotier-cli info -j
+  register: zerotier_info_json
+  changed_when: false
+  check_mode: false
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Set Node ID fact
+  ansible.builtin.set_fact:
+    zerotier_node_id: "{{ (zerotier_info_json.stdout | from_json).address }}"
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Check network status details
+  become: yes
+  ansible.builtin.command: zerotier-cli listnetworks -j
+  register: zerotier_network_details
+  changed_when: false
+  check_mode: false
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Debug Network Parsing (Verbose)
+  ansible.builtin.debug:
+    msg: 
+      - "Network ID: {{ zerotier_network_id }}"
+      - "Raw JSON: {{ zerotier_network_details.stdout }}"
+  when: zerotier_network_id | length > 0
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Parse network status
+  ansible.builtin.set_fact:
+    zerotier_net_status: "{{ (zerotier_network_details.stdout | from_json) | selectattr('id', 'equalto', zerotier_network_id) | map(attribute='status') | first | default('UNKNOWN') }}"
+  when: zerotier_network_id | length > 0
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Alert user to authorize node if access denied
+  ansible.builtin.pause:
+    seconds: 30
+    prompt: |
+      ##########################################################
+      #                  ACTION REQUIRED                       #
+      ##########################################################
+      
+      The ZeroTier node {{ zerotier_node_id }} has joined 
+      network {{ zerotier_network_id }} but is NOT authorized.
+      
+      Current Status: {{ zerotier_net_status }}
+      
+      1. Visit: {{ zerotier_api_url }}/network/{{ zerotier_network_id }}
+      2. Find Node ID: {{ zerotier_node_id }}
+      3. Check the [Auth] box to authorize this member.
+      
+      (Proceeding in 30 seconds...)
+      ##########################################################
+  when: 
+    - zerotier_network_id | length > 0
+    - zerotier_net_status == 'ACCESS_DENIED'
+  tags: [deploy, system, zerotier, phase0]

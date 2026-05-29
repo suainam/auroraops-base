@@ -1,0 +1,16 @@
+- name: Check swap devices
+  become: yes
+  ansible.builtin.command: swapon --show --bytes --noheadings --output NAME,TYPE,SIZE,PRIO
+  register: swap_devices
+  changed_when: false
+  tags: [swap]
+
+- name: Assert swapfile is present with lower priority
+  assert:
+    that:
+      - swap_devices.stdout is search("/swapfile")
+      - swap_devices.stdout is search(" 10")
+    fail_msg: "❌ swapfile 未找到或优先级不正确"
+    success_msg: "✅ swapfile 保留，优先级较低"
+  tags: [swap]
+

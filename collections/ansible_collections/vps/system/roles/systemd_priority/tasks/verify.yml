@@ -1,0 +1,100 @@
+---
+- name: Check systemd_priority baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ systemd_priority_fact_path }}"
+  register: systemd_priority_fact_stat
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Verify systemd_priority baseline exists
+  ansible.builtin.assert:
+    that:
+      - systemd_priority_fact_stat.stat.exists
+    fail_msg: "systemd_priority baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Read systemd_priority baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ systemd_priority_fact_path }}"
+  register: systemd_priority_fact_raw
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Parse systemd_priority baseline
+  ansible.builtin.set_fact:
+    systemd_priority_baseline: "{{ systemd_priority_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Verify systemd_priority baseline metadata
+  ansible.builtin.assert:
+    that:
+      - systemd_priority_baseline.auroraops_managed | default(false) | bool
+      - systemd_priority_baseline.version | default(0) | int >= 1
+      - systemd_priority_baseline.managed_services is mapping
+      - systemd_priority_baseline.managed_services | length > 0
+    fail_msg: "systemd_priority baseline content is invalid"
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Verify managed systemd priority override files exist
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item.value.managed_file }}"
+  register: systemd_priority_verify_file_stats
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  changed_when: false
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Read managed systemd priority override files
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ item.value.managed_file }}"
+  register: systemd_priority_verify_file_raw
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  when:
+    - (systemd_priority_verify_file_stats.results | selectattr('item.key', 'equalto', item.key) | map(attribute='stat.exists') | first | default(false))
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Build managed systemd priority file content map
+  ansible.builtin.set_fact:
+    systemd_priority_verify_file_content_map: "{{ systemd_priority_verify_file_content_map | default({}) | combine({ item.item.key: (item.content | b64decode) }) }}"
+  loop: "{{ systemd_priority_verify_file_raw.results | default([]) }}"
+  when:
+    - not (item.skipped | default(false))
+    - item.content is defined
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Build managed systemd priority verification facts
+  ansible.builtin.set_fact:
+    systemd_priority_verify_checks: "{{ (systemd_priority_verify_checks | default([])) + [ {
+      'name': item.key,
+      'has_file': (systemd_priority_verify_file_stats.results | selectattr('item.key', 'equalto', item.key) | map(attribute='stat.exists') | first | default(false)),
+      'content': (systemd_priority_verify_file_content_map[item.key] | default('')),
+      'expected_oom_score_adj': item.value.oom_score_adj | string,
+      'expected_nice': item.value.nice | string,
+      'pre_deploy_dir_exists': item.value.pre_deploy_dir_exists | default(false),
+      'pre_deploy_file_exists': item.value.pre_deploy_file_exists | default(false),
+      'pre_deploy_content': item.value.pre_deploy_content | default(''),
+      'managed_dir': item.value.managed_dir,
+      'managed_file': item.value.managed_file
+    } ] }}"
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Compute systemd_priority verification booleans
+  ansible.builtin.set_fact:
+    systemd_priority_verify_all_have_files: "{{ (systemd_priority_verify_checks | default([]) | selectattr('has_file') | list | length) == (systemd_priority_verify_checks | default([]) | length) }}"
+    systemd_priority_verify_all_have_marker: "{{ (systemd_priority_verify_checks | default([]) | rejectattr('content', 'search', '# Managed by AuroraOps: system.systemd_priority') | list | length) == 0 }}"
+    systemd_priority_verify_all_have_oom_score: "{{ (systemd_priority_verify_checks | default([]) | rejectattr('content', 'search', 'OOMScoreAdjust=') | list | length) == 0 }}"
+    systemd_priority_verify_all_have_nice: "{{ (systemd_priority_verify_checks | default([]) | rejectattr('content', 'search', 'Nice=') | list | length) == 0 }}"
+  tags: [verify, system, systemd_priority, phase0]
+
+- name: Verify managed systemd priority content matches desired values
+  ansible.builtin.assert:
+    that:
+      - systemd_priority_verify_checks | default([]) | length > 0
+      - systemd_priority_verify_all_have_files | bool
+      - systemd_priority_verify_all_have_marker | bool
+      - systemd_priority_verify_all_have_oom_score | bool
+      - systemd_priority_verify_all_have_nice | bool
+    fail_msg: "Managed systemd priority override is missing expected content"
+  tags: [verify, system, systemd_priority, phase0]

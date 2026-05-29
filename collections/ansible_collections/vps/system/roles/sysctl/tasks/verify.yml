@@ -1,0 +1,80 @@
+- name: Build desired sysctl plan for verification
+  ansible.builtin.import_tasks: build_desired_sysctl.yml
+  tags: [verify, system, sysctl, phase0]
+
+- name: Check sysctl baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_fact_path }}"
+  register: sysctl_fact_stat
+  tags: [verify, system, sysctl, phase0]
+
+- name: Verify sysctl baseline exists
+  ansible.builtin.assert:
+    that:
+      - sysctl_fact_stat.stat.exists
+    fail_msg: "Sysctl baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, sysctl, phase0, sysctl_verify_baseline]
+
+- name: Read sysctl baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ sysctl_fact_path }}"
+  register: sysctl_fact_raw
+  tags: [verify, system, sysctl, phase0]
+
+- name: Parse sysctl baseline
+  ansible.builtin.set_fact:
+    sysctl_baseline: "{{ sysctl_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, sysctl, phase0]
+
+- name: Verify sysctl baseline metadata
+  ansible.builtin.assert:
+    that:
+      - sysctl_baseline.auroraops_managed | default(false) | bool
+      - sysctl_baseline.version | default(0) | int >= 1
+      - sysctl_baseline.sysctl_managed_file == sysctl_managed_file
+      - sysctl_baseline.pre_deploy_values is defined
+      - sysctl_baseline.pre_deploy_module_files is defined
+    fail_msg: "Sysctl baseline content is invalid"
+  tags: [verify, system, sysctl, phase0, sysctl_verify_baseline]
+
+- name: Verify managed sysctl file exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_managed_file }}"
+  register: sysctl_managed_file_stat
+  failed_when: not sysctl_managed_file_stat.stat.exists
+  tags: [verify, system, sysctl, phase0, sysctl_verify_file_exists]
+
+- name: Verify managed module persist files exist
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
+  loop: "{{ sysctl_available_modules }}"
+  register: sysctl_module_file_checks
+  tags: [verify, system, sysctl, phase0, sysctl_verify_module_persist_config]
+
+- name: Assert managed module persist files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists | default(false)
+    fail_msg: "Managed module persist file missing: {{ item.stat.path }}"
+  loop: "{{ sysctl_module_file_checks.results }}"
+  tags: [verify, system, sysctl, phase0, sysctl_verify_module_persist_config]
+
+- name: Read applied sysctl parameters
+  become: true
+  ansible.builtin.shell: "sysctl -n {{ item.key }} | tr '\t' ' ' | xargs"
+  loop: "{{ final_sysctl_params | dict2items }}"
+  register: sysctl_param_check
+  changed_when: false
+  tags: [verify, system, sysctl, phase0, sysctl_verify_params]
+
+- name: Assert sysctl parameters match desired values
+  ansible.builtin.assert:
+    that:
+      - item.item.value | string == item.stdout | trim
+    fail_msg: "Sysctl value mismatch for {{ item.item.key }} (expected {{ item.item.value }}, got {{ item.stdout | trim }})"
+  loop: "{{ sysctl_param_check.results }}"
+  tags: [verify, system, sysctl, phase0, sysctl_verify_params]

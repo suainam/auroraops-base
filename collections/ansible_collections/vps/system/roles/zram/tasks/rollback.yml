@@ -1,0 +1,111 @@
+- name: Check zram baseline presence before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zram_fact_path }}"
+  register: zram_fact_stat
+  tags: [rollback, system, zram, phase0]
+
+- name: Refuse rollback without zram baseline
+  ansible.builtin.fail:
+    msg: "zram rollback requires baseline at {{ zram_fact_path }}"
+  when: not zram_fact_stat.stat.exists
+  tags: [rollback, system, zram, phase0]
+
+- name: Read zram baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ zram_fact_path }}"
+  register: zram_fact_raw
+  tags: [rollback, system, zram, phase0]
+
+- name: Parse zram baseline
+  ansible.builtin.set_fact:
+    zram_baseline: "{{ zram_fact_raw.content | b64decode | from_json }}"
+  tags: [rollback, system, zram, phase0]
+
+- name: Validate zram rollback baseline metadata
+  ansible.builtin.assert:
+    that:
+      - zram_baseline.auroraops_managed | default(false) | bool
+      - zram_baseline.version | default(0) | int >= 1
+    fail_msg: "zram rollback baseline is invalid"
+  tags: [rollback, system, zram, phase0]
+
+- name: Gather service facts before zram rollback
+  ansible.builtin.service_facts:
+  tags: [rollback, system, zram, phase0]
+
+- name: Check current zram-tools package status before rollback
+  ansible.builtin.command: dpkg-query -W -f='${Status}' zram-tools
+  register: zram_package_status
+  changed_when: false
+  failed_when: false
+  tags: [rollback, system, zram, phase0]
+
+- name: Parse current zram package presence before rollback
+  ansible.builtin.set_fact:
+    zram_package_installed_now: "{{ zram_package_status.rc == 0 and ('install ok installed' in zram_package_status.stdout) }}"
+  tags: [rollback, system, zram, phase0]
+
+- name: Stop zramswap service when present
+  become: true
+  ansible.builtin.systemd:
+    name: zramswap
+    enabled: false
+    state: stopped
+  when: "'zramswap.service' in ansible_facts.services"
+  ignore_errors: true
+  tags: [rollback, system, zram, zram_rollback_service, phase0]
+
+- name: Restore previous zramswap config content
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/default/zramswap
+    mode: "0644"
+    content: "{{ zram_baseline.pre_deploy_config_content }}"
+  when: zram_baseline.pre_deploy_config_exists | bool
+  tags: [rollback, system, zram, zram_restore_config, phase0]
+
+- name: Remove zramswap config when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: /etc/default/zramswap
+    state: absent
+  when: not (zram_baseline.pre_deploy_config_exists | bool)
+  tags: [rollback, system, zram, zram_remove_config, phase0]
+
+- name: Ensure zram-tools package present when it existed before deploy
+  become: true
+  ansible.builtin.apt:
+    name: zram-tools
+    state: present
+  when:
+    - zram_baseline.pre_deploy_package_installed | bool
+    - not zram_package_installed_now
+  tags: [rollback, system, zram, zram_restore_package, phase0]
+
+- name: Remove zram-tools package when absent before deploy
+  become: true
+  ansible.builtin.apt:
+    name: zram-tools
+    state: absent
+  when:
+    - not (zram_baseline.pre_deploy_package_installed | bool)
+    - zram_package_installed_now
+  tags: [rollback, system, zram, zram_remove_package, phase0]
+
+- name: Restore zramswap enabled state
+  become: true
+  ansible.builtin.systemd:
+    name: zramswap
+    enabled: "{{ zram_baseline.pre_deploy_service_enabled | bool }}"
+    state: "{{ 'started' if (zram_baseline.pre_deploy_active_zram | bool) else 'stopped' }}"
+  when: zram_baseline.pre_deploy_package_installed | bool
+  tags: [rollback, system, zram, zram_restore_service_state, phase0]
+
+- name: Remove zram baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ zram_fact_path }}"
+    state: absent
+  tags: [rollback, system, zram, zram_remove_baseline, phase0]

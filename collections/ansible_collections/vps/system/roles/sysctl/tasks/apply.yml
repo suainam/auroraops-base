@@ -1,0 +1,67 @@
+- name: Ensure facts.d directory exists for sysctl baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Persist pre-deploy sysctl baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ sysctl_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "sysctl_managed_file": sysctl_managed_file,
+          "pre_deploy_sysctl_file_exists": sysctl_managed_file_stat.stat.exists | default(false),
+          "pre_deploy_sysctl_file_content": (sysctl_managed_file_raw.content | b64decode) if (sysctl_managed_file_stat.stat.exists | default(false)) else '',
+          "pre_deploy_values": current_sysctl_values,
+          "pre_deploy_loaded_modules": sysctl_loaded_modules_before,
+          "pre_deploy_module_files": current_module_file_baseline | default({})
+        } | to_nice_json
+      }}
+  when: not sysctl_fact_stat.stat.exists
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Load available kernel modules
+  become: true
+  ansible.builtin.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ sysctl_available_modules }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Persist managed kernel modules
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
+    content: "{{ item }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ sysctl_available_modules }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Write managed sysctl file
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ sysctl_managed_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by AuroraOps: system.sysctl
+      {% for item in final_sysctl_params | dict2items %}
+      {{ item.key }} = {{ item.value }}
+      {% endfor %}
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Reload managed sysctl file
+  become: true
+  ansible.builtin.command: "sysctl -p {{ sysctl_managed_file }}"
+  changed_when: false
+  tags: [deploy, system, sysctl, phase0]

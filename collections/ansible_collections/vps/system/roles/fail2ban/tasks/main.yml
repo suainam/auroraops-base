@@ -1,0 +1,26 @@
+  # 启用控制变量: auroraops_roles['system']['fail2ban'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+  # 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+  - name: 角色启用检查
+    ansible.builtin.debug:
+      msg: "Role fail2ban is disabled, skipping"
+    when: not (auroraops_roles['system']['fail2ban'] | default(true) | bool)
+    tags: [always, deploy, system, fail2ban]
+
+  - name: 角色已启用，执行 Fail2ban 任务
+    ansible.builtin.debug:
+      msg: "Executing fail2ban role tasks"
+    when: auroraops_roles['system']['fail2ban'] | default(true) | bool
+    tags: [always, deploy, system, fail2ban]
+
+  - name: Run fail2ban preflight
+    ansible.builtin.import_tasks: preflight.yml
+    when: auroraops_roles['system']['fail2ban'] | default(true) | bool
+    tags: [deploy, system, fail2ban, phase1]
+
+  - name: Apply managed fail2ban changes
+    ansible.builtin.import_tasks: apply.yml
+    when:
+      - auroraops_roles['system']['fail2ban'] | default(true) | bool
+      - not ansible_check_mode
+    tags: [deploy, system, fail2ban, phase1]

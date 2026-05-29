@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# after.init: called by ufw-init.
+# This script is managed by Ansible.
+# It applies NAT, Mangle, and Filter rules additively to avoid flushing Docker chains.
+
+set -e
+
+case "$1" in
+start)
+    # === 1. NAT Table Rules ===
+    # 1.1 IPv4 NAT - Masquerade
+    iptables -t nat -C POSTROUTING -o {{ default_network_interface }} -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -o {{ default_network_interface }} -j MASQUERADE
+
+    {% if firewall_hysteria_hopping.enabled %}
+    # 1.2 IPv4 NAT - Hysteria Port Hopping
+    iptables -t nat -C PREROUTING -p udp --dport {{ firewall_hysteria_hopping.port_range }} -j REDIRECT --to-ports {{ firewall_hysteria_hopping.target_port }} 2>/dev/null || \
+    iptables -t nat -A PREROUTING -p udp --dport {{ firewall_hysteria_hopping.port_range }} -j REDIRECT --to-ports {{ firewall_hysteria_hopping.target_port }}
+    {% endif %}
+
+    # 1.3 IPv6 NAT - Masquerade
+    ip6tables -t nat -C POSTROUTING -o {{ default_network_interface }} -j MASQUERADE 2>/dev/null || \
+    ip6tables -t nat -A POSTROUTING -o {{ default_network_interface }} -j MASQUERADE
+
+    # === 2. Mangle Table Rules ===
+    # 2.1 IPv4 Mangle - TCPMSS Clamping
+    iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+    # === 3. Filter Table Rules (Docker Compatibility) ===
+    # We use the DOCKER-USER chain which is specifically provided by Docker for manual rules.
+    # Note: Docker must be running for this chain to exist.
+    if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+        iptables -C DOCKER-USER -i br-+ -j ACCEPT 2>/dev/null || iptables -A DOCKER-USER -i br-+ -j ACCEPT
+        iptables -C DOCKER-USER -o br-+ -j ACCEPT 2>/dev/null || iptables -A DOCKER-USER -o br-+ -j ACCEPT
+        iptables -C DOCKER-USER -i docker0 -j ACCEPT 2>/dev/null || iptables -A DOCKER-USER -i docker0 -j ACCEPT
+        iptables -C DOCKER-USER -o docker0 -j ACCEPT 2>/dev/null || iptables -A DOCKER-USER -o docker0 -j ACCEPT
+    fi
+    ;;
+stop)
+    # Rules will be flushed on system reboot or ufw-init flush-all.
+    ;;
+status)
+    echo "--- NAT Table ---"
+    iptables -t nat -L POSTROUTING -n -v
+    iptables -t nat -L PREROUTING -n -v
+    echo "--- Mangle Table ---"
+    iptables -t mangle -L FORWARD -n -v
+    echo "--- Filter Table (DOCKER-USER) ---"
+    iptables -L DOCKER-USER -n -v 2>/dev/null || echo "DOCKER-USER chain not found"
+    ;;
+flush-all)
+    ;;
+*)
+    echo "'$1' not supported"
+    echo "Usage: after.init {start|stop|flush-all|status}"
+    ;;
+esac

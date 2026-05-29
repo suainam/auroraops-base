@@ -1,0 +1,18 @@
+---
+base_fact_path: /etc/ansible/facts.d/base.fact
+system_timezone: Asia/Shanghai
+system_locale: en_US.UTF-8
+
+# NTP 优选列表 (Debian Pool)
+ntp_servers:
+  - 0.debian.pool.ntp.org
+  - 1.debian.pool.ntp.org
+  - 2.debian.pool.ntp.org
+  - 3.debian.pool.ntp.org
+
+# DNS 解析服务器列表 (混合 Google + Cloudflare + APNIC)
+dns_servers:
+  - 8.8.8.8  # Google
+  - 1.1.1.1  # Cloudflare
+  - 8.8.4.4  # Google
+  - 1.0.0.1  # Cloudflare

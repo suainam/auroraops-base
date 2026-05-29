@@ -1,0 +1,96 @@
+---
+- name: Ensure facts.d directory exists for user_management baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Persist pre-deploy user_management baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ user_management_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "admin_user": admin_user,
+          "admin_home": user_management_admin_home,
+          "admin_shell": user_management_shell,
+          "admin_groups": user_management_groups,
+          "pre_deploy_admin_exists": user_management_preflight.admin_exists,
+          "pre_deploy_admin_home": user_management_preflight.admin_home,
+          "pre_deploy_admin_shell": user_management_preflight.admin_shell,
+          "pre_deploy_admin_groups": user_management_preflight.admin_groups,
+          "pre_deploy_admin_password_hash": user_management_preflight.admin_password_hash,
+          "pre_deploy_root_password_hash": user_management_preflight.root_password_hash,
+          "root_authorized_keys_source_exists": user_management_preflight.root_authorized_keys_source_exists,
+          "pre_deploy_home_state": user_management_preflight.managed_home_state,
+          "pre_deploy_ssh_dir_state": user_management_preflight.managed_ssh_dir_state,
+          "pre_deploy_authorized_keys_state": user_management_preflight.managed_authorized_keys_state
+        } | to_nice_json
+      }}
+  when: not user_management_fact_stat.stat.exists
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Ensure admin user exists
+  become: true
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    state: present
+    shell: "{{ user_management_shell }}"
+    groups: "{{ user_management_groups | join(',') }}"
+    append: yes
+    create_home: yes
+    home: "{{ user_management_admin_home }}"
+    password: "{{ admin_password | password_hash('sha512', (admin_password | hash('sha256'))[:16]) }}"
+    update_password: always
+  when: not ansible_check_mode
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Ensure admin .ssh directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}/.ssh"
+    state: directory
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: "0700"
+  when: not ansible_check_mode
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Copy root authorized_keys to admin
+  become: true
+  ansible.builtin.copy:
+    src: /root/.ssh/authorized_keys
+    dest: "{{ user_management_admin_home }}/.ssh/authorized_keys"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: "0600"
+    remote_src: true
+  when:
+    - not ansible_check_mode
+    - user_management_preflight.root_authorized_keys_source_exists | bool
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Ensure admin home permissions are correct
+  become: true
+  ansible.builtin.file:
+    path: "{{ user_management_admin_home }}"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Set root password
+  become: true
+  ansible.builtin.user:
+    name: root
+    password: "{{ vault_root_password | password_hash('sha512', (vault_root_password | hash('sha256'))[:16]) }}"
+    update_password: always
+  when: not ansible_check_mode
+  tags: [deploy, personalization, user_management, phase2]

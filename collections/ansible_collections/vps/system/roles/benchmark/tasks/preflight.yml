@@ -1,0 +1,93 @@
+---
+- name: Check existing benchmark baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_baseline_path }}"
+  register: benchmark_baseline_stat
+
+- name: Read existing benchmark baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ benchmark_baseline_path }}"
+  register: benchmark_baseline_raw
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Parse existing benchmark baseline
+  ansible.builtin.set_fact:
+    benchmark_baseline: "{{ benchmark_baseline_raw.content | b64decode | from_json }}"
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Validate benchmark baseline metadata
+  ansible.builtin.assert:
+    that:
+      - benchmark_baseline.auroraops_managed | default(false) | bool
+      - benchmark_baseline.version | default(0) | int >= 1
+      - benchmark_baseline.script_path == benchmark_script_path
+      - benchmark_baseline.fact_path == benchmark_fact_path
+      - benchmark_baseline.pre_deploy_script_exists is defined
+      - benchmark_baseline.pre_deploy_script_content is defined
+      - benchmark_baseline.pre_deploy_fact_exists is defined
+      - benchmark_baseline.pre_deploy_fact_content is defined
+      - benchmark_baseline.pre_deploy_host_vars_existed is defined
+    fail_msg: "Existing benchmark baseline is invalid"
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Capture benchmark script state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_script_path }}"
+  register: benchmark_script_stat
+
+- name: Read benchmark script state
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ benchmark_script_path }}"
+  register: benchmark_script_raw
+  when: benchmark_script_stat.stat.exists
+
+- name: Capture benchmark fact state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_fact_path }}"
+  register: benchmark_fact_stat
+
+- name: Read benchmark fact state
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ benchmark_fact_path }}"
+  register: benchmark_fact_raw
+  when: benchmark_fact_stat.stat.exists
+
+- name: Capture benchmark report state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_report_path }}"
+  register: benchmark_report_stat
+
+- name: Read benchmark report state
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ benchmark_report_path }}"
+  register: benchmark_report_raw
+  when: benchmark_report_stat.stat.exists
+
+- name: Capture benchmark host_vars state
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ benchmark_host_vars_path }}"
+  vars:
+    ansible_become: false
+  register: benchmark_host_vars_stat
+
+- name: Build benchmark preflight summary
+  ansible.builtin.set_fact:
+    benchmark_preflight:
+      baseline_exists: "{{ benchmark_baseline_stat.stat.exists | default(false) }}"
+      script_exists: "{{ benchmark_script_stat.stat.exists | default(false) }}"
+      script_content: "{{ (benchmark_script_raw.content | b64decode) if (benchmark_script_raw is defined and benchmark_script_raw.content is defined) else '' }}"
+      fact_exists: "{{ benchmark_fact_stat.stat.exists | default(false) }}"
+      fact_content: "{{ (benchmark_fact_raw.content | b64decode) if (benchmark_fact_raw is defined and benchmark_fact_raw.content is defined) else '' }}"
+      report_exists: "{{ benchmark_report_stat.stat.exists | default(false) }}"
+      report_content: "{{ (benchmark_report_raw.content | b64decode) if (benchmark_report_raw is defined and benchmark_report_raw.content is defined) else '' }}"
+      host_vars_existed: "{{ benchmark_host_vars_stat.stat.exists | default(false) }}"

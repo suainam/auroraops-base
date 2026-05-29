@@ -1,0 +1,65 @@
+- name: Check logrotate baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ logrotate_fact_path }}"
+  register: logrotate_fact_stat
+  tags: [verify, system, logrotate, phase1]
+
+- name: Verify logrotate baseline exists
+  ansible.builtin.assert:
+    that:
+      - logrotate_fact_stat.stat.exists
+    fail_msg: "Logrotate baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, logrotate, phase1, logrotate_verify_baseline]
+
+- name: Read logrotate baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ logrotate_fact_path }}"
+  register: logrotate_fact_raw
+  tags: [verify, system, logrotate, phase1]
+
+- name: Parse logrotate baseline
+  ansible.builtin.set_fact:
+    logrotate_baseline: "{{ logrotate_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, logrotate, phase1]
+
+- name: Verify logrotate baseline metadata
+  ansible.builtin.assert:
+    that:
+      - logrotate_baseline.auroraops_managed | default(false) | bool
+      - logrotate_baseline.version | default(0) | int >= 1
+      - logrotate_baseline.managed_file == logrotate_managed_file
+      - logrotate_baseline.managed_dir == logrotate_managed_dir
+      - logrotate_baseline.pre_deploy_main_content is defined
+      - logrotate_baseline.service_configs is defined
+    fail_msg: "Logrotate baseline content is invalid"
+  tags: [verify, system, logrotate, phase1, logrotate_verify_baseline]
+
+- name: Verify rotate setting in logrotate.conf
+  become: true
+  ansible.builtin.command: grep '^rotate {{ logrotate_rotate_count }}' {{ logrotate_managed_file }}
+  register: logrotate_rotate_check
+  changed_when: false
+  failed_when: logrotate_rotate_check.rc != 0
+  tags: [verify, system, logrotate, phase1, logrotate_verify_main]
+
+- name: Verify compress setting in logrotate.conf
+  become: true
+  ansible.builtin.command: grep '^compress' {{ logrotate_managed_file }}
+  register: logrotate_compress_check
+  changed_when: false
+  failed_when: logrotate_enable_compress | bool and logrotate_compress_check.rc != 0
+  tags: [verify, system, logrotate, phase1, logrotate_verify_main]
+
+- name: Verify service-specific logrotate files exist
+  become: true
+  ansible.builtin.stat:
+    path: "{{ logrotate_managed_dir }}/{{ item.name }}"
+  loop: "{{ logrotate_configs_to_deploy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: service_logrotate_conf_check
+  failed_when: not item.stat.exists
+  when: logrotate_configs_to_deploy | default([]) | length > 0
+  tags: [verify, system, logrotate, phase1, logrotate_verify_service_configs]

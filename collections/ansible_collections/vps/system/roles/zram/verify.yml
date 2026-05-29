@@ -1,0 +1,17 @@
+# roles/system-tuning/zram/verify.yml
+---
+- name: Check zram swap device
+  become: yes
+  ansible.builtin.command: /usr/sbin/swapon --show --bytes --noheadings --output NAME,TYPE,SIZE,PRIO
+  register: swap_devices
+  changed_when: false
+  tags: [zram]
+
+- name: Assert zram is active with high priority
+  assert:
+    that:
+      - swap_devices.stdout is search("zram")
+      - swap_devices.stdout is search(zram_priority | default(100) | string)
+    fail_msg: "❌ zram 未启用或优先级不正确"
+    success_msg: "✅ zram 已启用，优先级正确"
+  tags: [zram]

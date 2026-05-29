@@ -1,0 +1,160 @@
+- name: Bootstrap init rollback with system Python interpreter
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /usr/bin/python3
+  tags:
+  - rollback
+  - system
+  - init
+  - phase0
+
+- name: Check init baseline presence before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ init_fact_path }}"
+  register: init_fact_stat
+  tags:
+  - rollback
+  - system
+  - init
+  - phase0
+
+- name: Read init baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ init_fact_path }}"
+  register: init_fact_raw
+  when: init_fact_stat.stat.exists
+  tags:
+  - rollback
+  - system
+  - init
+  - phase0
+
+- name: Parse init baseline for rollback
+  ansible.builtin.set_fact:
+    init_baseline: "{{ init_fact_raw.content | b64decode | from_json }}"
+  when: init_fact_stat.stat.exists
+  tags:
+  - rollback
+  - system
+  - init
+  - phase0
+
+- name: Validate init rollback baseline
+  ansible.builtin.assert:
+    that:
+    - init_baseline.auroraops_managed | default(false) | bool
+    - init_baseline.version | default(0) | int >= 1
+    - init_baseline.preinstalled_packages is defined
+    - init_baseline.pre_deploy_resolv_exists is defined
+    - init_baseline.pre_deploy_resolv_content is defined
+    - init_baseline.pre_deploy_has_nameserver is defined
+    fail_msg: init rollback baseline is invalid
+  when: init_fact_stat.stat.exists
+  tags:
+  - rollback
+  - system
+  - init
+  - phase0
+
+- name: Restore pre-deploy sources.list
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list
+    mode: "0644"
+    content: "{{ init_baseline.pre_deploy_sources_content }}"
+  when:
+  - init_fact_stat.stat.exists
+  - init_baseline.pre_deploy_sources_exists | bool
+  tags:
+  - rollback
+  - system
+  - init
+  - init_restore_sources
+  - phase0
+
+- name: Restore pre-deploy resolv.conf content
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    mode: "0644"
+    content: "{{ init_baseline.pre_deploy_resolv_content }}"
+  when:
+  - init_fact_stat.stat.exists
+  - init_baseline.pre_deploy_resolv_exists | bool
+  tags:
+  - rollback
+  - system
+  - init
+  - init_restore_resolver
+  - phase0
+
+- name: Remove bootstrap resolv.conf when it did not exist before deploy
+  become: true
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: absent
+  when:
+  - init_fact_stat.stat.exists
+  - not (init_baseline.pre_deploy_resolv_exists | bool)
+  tags:
+  - rollback
+  - system
+  - init
+  - init_restore_resolver
+  - phase0
+
+- name: Remove managed sources.list when it did not exist before deploy
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/sources.list
+    state: absent
+  when:
+  - init_fact_stat.stat.exists
+  - not (init_baseline.pre_deploy_sources_exists | bool)
+  tags:
+  - rollback
+  - system
+  - init
+  - init_restore_sources
+  - phase0
+
+- name: Remove packages that were absent before deploy
+  become: true
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: absent
+  loop: >-
+    {{
+      (
+        init_packages
+        | difference(init_baseline.preinstalled_packages | default([]))
+        | difference(['dnsutils'])
+      )
+      +
+      (
+        ['bind9-dnsutils']
+        if 'dnsutils' in (init_packages | difference(init_baseline.preinstalled_packages | default([])))
+        else []
+      )
+    }}
+  when: init_fact_stat.stat.exists
+  tags:
+  - rollback
+  - system
+  - init
+  - init_uninstall_tools
+  - phase0
+
+- name: Remove init baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ init_fact_path }}"
+    state: absent
+  when: init_fact_stat.stat.exists
+  tags:
+  - rollback
+  - system
+  - init
+  - init_remove_baseline
+  - phase0

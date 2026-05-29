@@ -1,0 +1,10 @@
+namespace: vps
+name: personalization
+version: 1.1.0
+readme: README.md
+authors:
+  - suai
+description: "personalization roles collection"
+license: MIT
+tags: [ansible, vps, personalization]
+dependencies: {}

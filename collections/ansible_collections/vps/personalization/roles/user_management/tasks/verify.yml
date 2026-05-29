@@ -1,0 +1,164 @@
+---
+- name: Check user_management baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ user_management_fact_path }}"
+  register: user_management_fact_stat
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Verify user_management baseline exists
+  ansible.builtin.assert:
+    that:
+      - user_management_fact_stat.stat.exists
+    fail_msg: "user_management baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Read user_management baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ user_management_fact_path }}"
+  register: user_management_fact_raw
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Parse user_management baseline
+  ansible.builtin.set_fact:
+    user_management_baseline: "{{ user_management_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Verify user_management baseline metadata
+  ansible.builtin.assert:
+    that:
+      - user_management_baseline.auroraops_managed | default(false) | bool
+      - user_management_baseline.version | default(0) | int >= 1
+      - user_management_baseline.admin_user == admin_user
+      - user_management_baseline.admin_home == user_management_admin_home
+      - user_management_baseline.admin_shell == user_management_shell
+      - user_management_baseline.admin_groups is defined
+      - user_management_baseline.pre_deploy_admin_exists is defined
+      - user_management_baseline.pre_deploy_admin_home is defined
+      - user_management_baseline.pre_deploy_admin_shell is defined
+      - user_management_baseline.pre_deploy_admin_groups is defined
+      - user_management_baseline.pre_deploy_admin_password_hash is defined
+      - user_management_baseline.pre_deploy_root_password_hash is defined
+      - user_management_baseline.pre_deploy_home_state is defined
+      - user_management_baseline.pre_deploy_ssh_dir_state is defined
+      - user_management_baseline.pre_deploy_authorized_keys_state is defined
+    fail_msg: "user_management baseline content is invalid"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Check admin user state
+  become: true
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ admin_user }}"
+  register: user_management_admin_getent
+  failed_when: false
+  changed_when: false
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Check root user state
+  become: true
+  ansible.builtin.getent:
+    database: passwd
+    key: root
+  register: user_management_root_getent
+  failed_when: false
+  changed_when: false
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Assert admin and root users exist
+  ansible.builtin.assert:
+    that:
+      - user_management_admin_getent.ansible_facts.getent_passwd is defined
+      - user_management_root_getent.ansible_facts.getent_passwd is defined
+      - user_management_admin_getent.ansible_facts.getent_passwd[admin_user][4] == user_management_admin_home
+      - user_management_admin_getent.ansible_facts.getent_passwd[admin_user][5] == user_management_shell
+    fail_msg: "user_management account state is invalid"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Check admin groups
+  become: true
+  ansible.builtin.command: id -Gn {{ admin_user }}
+  register: user_management_groups_check
+  changed_when: false
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Assert admin groups include expected groups
+  ansible.builtin.assert:
+    that:
+      - item in user_management_groups_check.stdout.split(' ')
+    fail_msg: "'{{ admin_user }}' 用户不属于组: {{ item }}"
+  loop: "{{ user_management_groups }}"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Check managed paths
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ user_management_admin_home }}"
+    - "{{ user_management_admin_home }}/.ssh"
+    - "{{ user_management_admin_home }}/.ssh/authorized_keys"
+  register: user_management_verify_file_stats
+  changed_when: false
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Determine whether authorized_keys should exist after deploy
+  ansible.builtin.set_fact:
+    user_management_verify_authorized_keys_expected: >-
+      {{
+        (user_management_baseline.pre_deploy_authorized_keys_state.exists | default(false))
+        or
+        (user_management_baseline.root_authorized_keys_source_exists | default(false))
+      }}
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Assert required managed paths exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Managed path missing: {{ item.item }}"
+  loop: "{{ user_management_verify_file_stats.results[:2] }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Assert authorized_keys exists when expected
+  ansible.builtin.assert:
+    that:
+      - user_management_verify_file_stats.results[2].stat.exists
+    fail_msg: "Managed file missing: {{ user_management_admin_home }}/.ssh/authorized_keys"
+  when: user_management_verify_authorized_keys_expected | bool
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Assert managed path metadata
+  ansible.builtin.assert:
+    that:
+      - item.stat.pw_name == item.expected_owner
+      - item.stat.gr_name == item.expected_group
+      - item.stat.mode == item.expected_mode
+    fail_msg: "Managed path metadata is invalid: {{ item.path }}"
+  loop:
+    - path: "{{ user_management_admin_home }}"
+      stat: "{{ user_management_verify_file_stats.results[0].stat }}"
+      expected_owner: "{{ admin_user }}"
+      expected_group: "{{ admin_user }}"
+      expected_mode: "0755"
+    - path: "{{ user_management_admin_home }}/.ssh"
+      stat: "{{ user_management_verify_file_stats.results[1].stat }}"
+      expected_owner: "{{ admin_user }}"
+      expected_group: "{{ admin_user }}"
+      expected_mode: "0700"
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [verify, personalization, user_management, phase2]
+
+- name: Assert authorized_keys metadata when expected
+  ansible.builtin.assert:
+    that:
+      - user_management_verify_file_stats.results[2].stat.pw_name == admin_user
+      - user_management_verify_file_stats.results[2].stat.gr_name == admin_user
+      - user_management_verify_file_stats.results[2].stat.mode == "0600"
+    fail_msg: "Managed path metadata is invalid: {{ user_management_admin_home }}/.ssh/authorized_keys"
+  when: user_management_verify_authorized_keys_expected | bool
+  tags: [verify, personalization, user_management, phase2]

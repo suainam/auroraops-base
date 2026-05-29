@@ -1,0 +1,3 @@
+limits_fact_path: /etc/ansible/facts.d/limits.fact
+limits_managed_file: /etc/security/limits.d/99-nofile.conf
+limits_nofile: 1048576

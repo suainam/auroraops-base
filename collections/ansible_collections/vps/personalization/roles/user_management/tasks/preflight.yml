@@ -1,0 +1,164 @@
+---
+- name: Check existing user_management baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ user_management_fact_path }}"
+  register: user_management_fact_stat
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Read existing user_management baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ user_management_fact_path }}"
+  register: user_management_fact_raw
+  when: user_management_fact_stat.stat.exists
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Parse existing user_management baseline
+  ansible.builtin.set_fact:
+    user_management_baseline: "{{ user_management_fact_raw.content | b64decode | from_json }}"
+  when: user_management_fact_stat.stat.exists
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Validate user_management baseline metadata
+  ansible.builtin.assert:
+    that:
+      - user_management_baseline.auroraops_managed | default(false) | bool
+      - user_management_baseline.version | default(0) | int >= 1
+      - user_management_baseline.admin_user == admin_user
+      - user_management_baseline.admin_home == user_management_admin_home
+      - user_management_baseline.admin_shell == user_management_shell
+      - user_management_baseline.admin_groups is defined
+      - user_management_baseline.pre_deploy_admin_exists is defined
+      - user_management_baseline.pre_deploy_admin_home is defined
+      - user_management_baseline.pre_deploy_admin_shell is defined
+      - user_management_baseline.pre_deploy_admin_groups is defined
+      - user_management_baseline.pre_deploy_admin_password_hash is defined
+      - user_management_baseline.pre_deploy_root_password_hash is defined
+      - user_management_baseline.pre_deploy_home_state is defined
+      - user_management_baseline.pre_deploy_ssh_dir_state is defined
+      - user_management_baseline.pre_deploy_authorized_keys_state is defined
+    fail_msg: "Existing user_management baseline is invalid"
+  when: user_management_fact_stat.stat.exists
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Check current admin user state
+  become: true
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ admin_user }}"
+  register: user_management_admin_getent
+  failed_when: false
+  changed_when: false
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Check current root user state
+  become: true
+  ansible.builtin.getent:
+    database: passwd
+    key: root
+  register: user_management_root_getent
+  failed_when: false
+  changed_when: false
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Read current admin password hash
+  become: true
+  check_mode: false
+  ansible.builtin.command: "getent shadow {{ admin_user }}"
+  register: user_management_admin_shadow
+  failed_when: false
+  changed_when: false
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Read current root password hash
+  become: true
+  check_mode: false
+  ansible.builtin.command: "getent shadow root"
+  register: user_management_root_shadow
+  failed_when: false
+  changed_when: false
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Read current admin supplementary groups
+  become: true
+  check_mode: false
+  ansible.builtin.command: "id -Gn {{ admin_user }}"
+  register: user_management_admin_groups_raw
+  failed_when: false
+  changed_when: false
+  when: user_management_admin_getent.ansible_facts.getent_passwd is defined
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Check current managed paths
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ user_management_admin_home }}"
+    - "{{ user_management_admin_home }}/.ssh"
+    - "{{ user_management_admin_home }}/.ssh/authorized_keys"
+  register: user_management_file_stats
+  changed_when: false
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Check root authorized_keys source state
+  become: true
+  ansible.builtin.stat:
+    path: /root/.ssh/authorized_keys
+  register: user_management_root_authorized_keys_source_stat
+  changed_when: false
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Build current user_management path map
+  ansible.builtin.set_fact:
+    user_management_current_file_map: "{{ user_management_current_file_map | default({}) | combine({ item.item: item.stat.exists | default(false) }) }}"
+  loop: "{{ user_management_file_stats.results }}"
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Read current admin authorized_keys content
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ user_management_admin_home }}/.ssh/authorized_keys"
+  register: user_management_authorized_keys_raw
+  when: user_management_current_file_map[user_management_admin_home ~ '/.ssh/authorized_keys'] | default(false)
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Adopt legacy managed user_management state as rollback baseline
+  ansible.builtin.debug:
+    msg: "Adopting existing {{ admin_user }} account state at {{ user_management_admin_home }} as pre-deploy baseline because no user_management baseline exists yet."
+  when:
+    - not user_management_fact_stat.stat.exists
+    - user_management_admin_getent.ansible_facts.getent_passwd is defined
+  tags: [deploy, personalization, user_management, phase2]
+
+- name: Build user_management preflight summary
+  ansible.builtin.set_fact:
+    user_management_preflight:
+      admin_exists: "{{ user_management_admin_getent.ansible_facts.getent_passwd is defined }}"
+      root_exists: "{{ user_management_root_getent.ansible_facts.getent_passwd is defined }}"
+      baseline_exists: "{{ user_management_fact_stat.stat.exists | default(false) }}"
+      admin_home: "{{ (user_management_admin_getent.ansible_facts.getent_passwd[admin_user][4] if (user_management_admin_getent.ansible_facts.getent_passwd is defined) else '') }}"
+      admin_shell: "{{ (user_management_admin_getent.ansible_facts.getent_passwd[admin_user][5] if (user_management_admin_getent.ansible_facts.getent_passwd is defined) else '') }}"
+      admin_groups: "{{ (user_management_admin_groups_raw.stdout.split() if (user_management_admin_groups_raw is defined and user_management_admin_groups_raw.stdout is defined) else []) }}"
+      admin_password_hash: "{{ (user_management_admin_shadow.stdout.split(':')[1] if user_management_admin_shadow.rc == 0 else '') }}"
+      root_password_hash: "{{ (user_management_root_shadow.stdout.split(':')[1] if user_management_root_shadow.rc == 0 else '') }}"
+      root_authorized_keys_source_exists: "{{ user_management_root_authorized_keys_source_stat.stat.exists | default(false) }}"
+      current_files: "{{ user_management_current_file_map | default({}) }}"
+      managed_home_state:
+        exists: "{{ user_management_file_stats.results[0].stat.exists | default(false) }}"
+        owner: "{{ user_management_file_stats.results[0].stat.pw_name | default('') }}"
+        group: "{{ user_management_file_stats.results[0].stat.gr_name | default('') }}"
+        mode: "{{ user_management_file_stats.results[0].stat.mode | default('') }}"
+      managed_ssh_dir_state:
+        exists: "{{ user_management_file_stats.results[1].stat.exists | default(false) }}"
+        owner: "{{ user_management_file_stats.results[1].stat.pw_name | default('') }}"
+        group: "{{ user_management_file_stats.results[1].stat.gr_name | default('') }}"
+        mode: "{{ user_management_file_stats.results[1].stat.mode | default('') }}"
+      managed_authorized_keys_state:
+        exists: "{{ user_management_file_stats.results[2].stat.exists | default(false) }}"
+        owner: "{{ user_management_file_stats.results[2].stat.pw_name | default('') }}"
+        group: "{{ user_management_file_stats.results[2].stat.gr_name | default('') }}"
+        mode: "{{ user_management_file_stats.results[2].stat.mode | default('') }}"
+        content: "{{ (user_management_authorized_keys_raw.content | b64decode) if (user_management_authorized_keys_raw is defined and user_management_authorized_keys_raw.content is defined) else '' }}"
+  tags: [deploy, personalization, user_management, phase2]

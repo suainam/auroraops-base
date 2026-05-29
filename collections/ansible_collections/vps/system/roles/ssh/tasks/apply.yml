@@ -1,0 +1,115 @@
+---
+- name: Ensure facts.d directory exists for ssh baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, ssh, phase1]
+
+- name: Persist pre-deploy ssh baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ ssh_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "main_config_path": ssh_main_config_path,
+          "managed_dropin_path": ssh_managed_dropin_path,
+          "pre_deploy_main_exists": ssh_preflight.main_config_exists,
+          "pre_deploy_main_content": ssh_preflight.main_config_content,
+          "pre_deploy_dropin_exists": ssh_preflight.managed_dropin_exists,
+          "pre_deploy_dropin_content": ssh_preflight.managed_dropin_content,
+          "pre_deploy_service_enabled": ssh_preflight.service_enabled,
+          "pre_deploy_service_running": ssh_preflight.service_running
+        } | to_nice_json
+      }}
+  when: not ssh_fact_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Ensure ssh managed drop-in directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ ssh_managed_dropin_dir }}"
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, ssh, phase1]
+
+- name: Ensure legacy ssh Port directive is absent from main config
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ ssh_main_config_path }}"
+    regexp: "^#?Port"
+    state: absent
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+
+- name: Ensure legacy PermitRootLogin directive is absent from main config
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ ssh_main_config_path }}"
+    regexp: "^#?PermitRootLogin"
+    state: absent
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+
+- name: Ensure legacy PasswordAuthentication directive is absent from main config
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ ssh_main_config_path }}"
+    regexp: "^#?PasswordAuthentication"
+    state: absent
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+
+- name: Remove legacy Ansible managed block from main config
+  become: true
+  ansible.builtin.blockinfile:
+    path: "{{ ssh_main_config_path }}"
+    block: ""
+    state: absent
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+
+- name: Ensure main ssh config includes drop-in directory
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ ssh_main_config_path }}"
+    regexp: "^#?Include /etc/ssh/sshd_config.d/\\*\\.conf"
+    line: "Include /etc/ssh/sshd_config.d/*.conf"
+    insertbefore: BOF
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+
+- name: Deploy managed ssh drop-in configuration
+  become: true
+  ansible.builtin.template:
+    src: 99-ansible.conf.j2
+    dest: "{{ ssh_managed_dropin_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+
+- name: Ensure ssh service is enabled and running
+  become: true
+  ansible.builtin.service:
+    name: "{{ ssh_service_name }}"
+    enabled: true
+    state: started
+  tags: [deploy, system, ssh, phase1]
+
+- name: Flush ssh handlers after apply
+  ansible.builtin.meta: flush_handlers
+  tags: [deploy, system, ssh, phase1]
+
+- name: Validate final sshd syntax
+  become: true
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  tags: [deploy, system, ssh, phase1]

@@ -1,0 +1,4 @@
+---
+- name: Roll back managed user_management state
+  ansible.builtin.import_tasks: tasks/rollback.yml
+  tags: [rollback, personalization, user_management, phase2]

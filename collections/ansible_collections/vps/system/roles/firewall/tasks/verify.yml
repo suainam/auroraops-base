@@ -1,0 +1,168 @@
+- name: Check firewall baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ firewall_fact_path }}"
+  register: firewall_fact_stat
+  tags: [verify, system, firewall, phase1]
+
+- name: Verify firewall baseline exists
+  ansible.builtin.assert:
+    that:
+      - firewall_fact_stat.stat.exists
+    fail_msg: "Firewall baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, firewall, phase1, firewall_verify_baseline]
+
+- name: Read firewall baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ firewall_fact_path }}"
+  register: firewall_fact_raw
+  tags: [verify, system, firewall, phase1]
+
+- name: Parse firewall baseline
+  ansible.builtin.set_fact:
+    firewall_baseline: "{{ firewall_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Build effective firewall allow lists for verification
+  ansible.builtin.set_fact:
+    firewall_effective_tcp_ports: "{{ ((firewall_tcp_ports | default([])) + [ssh_port]) | map('string') | unique | sort }}"
+    firewall_effective_udp_ports: "{{ (firewall_udp_ports | default([])) | map('string') | unique | sort }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Verify firewall baseline metadata
+  ansible.builtin.assert:
+    that:
+      - firewall_baseline.auroraops_managed | default(false) | bool
+      - firewall_baseline.version | default(0) | int >= firewall_baseline_version
+      - firewall_baseline.ssh_port is defined
+      - firewall_baseline.managed_files is defined
+      - firewall_baseline.managed_dirs is defined
+      - firewall_baseline.pre_deploy_managed_files is defined
+      - firewall_baseline.pre_deploy_managed_dirs is defined
+      - firewall_baseline.pre_deploy_ufw_pkg_installed is defined
+      - firewall_baseline.pre_deploy_nftables_pkg_installed is defined
+      - firewall_baseline.pre_deploy_sysctl_values is defined
+      - firewall_baseline.pre_deploy_ufw_enabled is defined
+    fail_msg: "Firewall baseline content is invalid"
+  tags: [verify, system, firewall, phase1, firewall_verify_baseline]
+
+- name: Verify UFW is active
+  become: true
+  ansible.builtin.command: ufw status
+  register: ufw_status_result
+  changed_when: false
+  tags: [verify, system, firewall, phase1]
+
+- name: Check if UFW is enabled in status output
+  ansible.builtin.assert:
+    that:
+      - "'Status: active' in ufw_status_result.stdout"
+    fail_msg: "UFW is not active"
+  tags: [verify, system, firewall, phase1]
+
+- name: Check if configured SSH port is allowed
+  ansible.builtin.assert:
+    that:
+      - ((ssh_port | string) + '/tcp') in ufw_status_result.stdout
+    fail_msg: "SSH port {{ ssh_port }} is not allowed in UFW"
+  tags: [verify, system, firewall, phase1]
+
+- name: Check if baseline SSH port matches active SSH port
+  ansible.builtin.assert:
+    that:
+      - firewall_baseline.ssh_port == (ssh_port | string)
+    fail_msg: "Firewall baseline SSH port {{ firewall_baseline.ssh_port }} does not match active ssh_port {{ ssh_port }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Check if configured TCP ports are allowed
+  ansible.builtin.assert:
+    that:
+      - (item + '/tcp') in ufw_status_result.stdout
+    fail_msg: "Port {{ item }} (TCP) is not allowed in UFW"
+  loop: "{{ firewall_effective_tcp_ports }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Check if configured UDP ports are allowed
+  ansible.builtin.assert:
+    that:
+      - (item + '/udp') in ufw_status_result.stdout
+    fail_msg: "Port {{ item }} (UDP) is not allowed in UFW"
+  loop: "{{ firewall_effective_udp_ports }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Check if Hysteria Hopping UDP range is allowed
+  ansible.builtin.assert:
+    that:
+      - (firewall_hysteria_hopping.port_range + '/udp') in ufw_status_result.stdout
+    fail_msg: "Hysteria hopping range {{ firewall_hysteria_hopping.port_range }} (UDP) is not allowed"
+  when: firewall_hysteria_hopping.enabled
+  tags: [verify, system, firewall, phase1]
+
+- name: Check current forwarding sysctl values
+  become: true
+  ansible.builtin.command: "sysctl -n {{ item }}"
+  loop: "{{ firewall_forward_sysctls }}"
+  register: firewall_verify_sysctl_checks
+  changed_when: false
+  tags: [verify, system, firewall, phase1]
+
+- name: Assert forwarding sysctl values are enabled
+  ansible.builtin.assert:
+    that:
+      - item.stdout == '1'
+    fail_msg: "Forwarding sysctl {{ item.item }} is not enabled"
+  loop: "{{ firewall_verify_sysctl_checks.results }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Verify required managed firewall files exist
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/default/ufw
+    - /etc/ufw/after.init
+    - /etc/ufw/before.rules
+    - /etc/ufw/before6.rules
+  register: firewall_verify_managed_files
+  tags: [verify, system, firewall, phase1]
+
+- name: Assert required managed firewall files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Managed firewall file missing after apply: {{ item.stat.path }}"
+  loop: "{{ firewall_verify_managed_files.results }}"
+  tags: [verify, system, firewall, phase1]
+
+- name: Read managed UFW after.init
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/ufw/after.init
+  register: firewall_after_init_raw
+  tags: [verify, system, firewall, phase1]
+
+- name: Assert managed UFW after.init carries AuroraOps content
+  ansible.builtin.assert:
+    that:
+      - "'This script is managed by Ansible.' in (firewall_after_init_raw.content | b64decode)"
+    fail_msg: "/etc/ufw/after.init does not contain managed firewall template content"
+  tags: [verify, system, firewall, phase1]
+
+- name: Verify NAT Redirect rule exists
+  become: true
+  ansible.builtin.command: iptables -t nat -L PREROUTING -n
+  register: nat_rules
+  changed_when: false
+  when: firewall_hysteria_hopping.enabled
+  tags: [verify, system, firewall, phase1]
+
+- name: Assert NAT Redirect rule for Hysteria
+  ansible.builtin.assert:
+    that:
+      - "'REDIRECT' in nat_rules.stdout"
+      - "('udp dpts:' + firewall_hysteria_hopping.port_range) in nat_rules.stdout"
+      - "('redir ports ' + firewall_hysteria_hopping.target_port | string) in nat_rules.stdout"
+    fail_msg: "Hysteria NAT redirect rule is missing or incorrect"
+  when: firewall_hysteria_hopping.enabled
+  tags: [verify, system, firewall, phase1]

@@ -1,0 +1,93 @@
+- name: Gather memory facts
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  tags: [deploy, system, zram, phase0]
+
+- name: Determine dynamic zram state
+  ansible.builtin.set_fact:
+    _actual_ram_mb: "{{ performance.hardware.ram_mb | default(ansible_local.performance.hardware.ram_mb | default(ansible_facts['memtotal_mb'])) | int }}"
+    _zram_auto_disabled: "{{ (performance.hardware.ram_mb | default(ansible_local.performance.hardware.ram_mb | default(ansible_facts['memtotal_mb'])) | int) > (zram_auto_disable_ram_mb_threshold | int) }}"
+  tags: [deploy, system, zram, phase0]
+
+- name: Check existing zram baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zram_fact_path }}"
+  register: zram_fact_stat
+  tags: [deploy, system, zram, phase0]
+
+- name: Read existing zram baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ zram_fact_path }}"
+  register: zram_fact_raw
+  when: zram_fact_stat.stat.exists
+  tags: [deploy, system, zram, phase0]
+
+- name: Parse existing zram baseline
+  ansible.builtin.set_fact:
+    zram_baseline: "{{ zram_fact_raw.content | b64decode | from_json }}"
+  when: zram_fact_stat.stat.exists
+  tags: [deploy, system, zram, phase0]
+
+- name: Validate managed zram baseline metadata
+  ansible.builtin.assert:
+    that:
+      - zram_baseline.auroraops_managed | default(false) | bool
+      - zram_baseline.version | default(0) | int >= 1
+      - zram_baseline.pre_deploy_package_installed is defined
+      - zram_baseline.pre_deploy_service_enabled is defined
+      - zram_baseline.pre_deploy_active_zram is defined
+      - zram_baseline.pre_deploy_config_exists is defined
+    fail_msg: "Existing zram baseline is invalid"
+  when: zram_fact_stat.stat.exists
+  tags: [deploy, system, zram, phase0]
+
+- name: Check zram-tools package status
+  ansible.builtin.command: dpkg-query -W -f='${Status}' zram-tools
+  register: zram_package_status
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, zram, phase0]
+
+- name: Check current zramswap config
+  become: true
+  ansible.builtin.stat:
+    path: /etc/default/zramswap
+  register: zramswap_config_stat
+  tags: [deploy, system, zram, phase0]
+
+- name: Read current zramswap config
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/default/zramswap
+  register: zramswap_config_raw
+  when: zramswap_config_stat.stat.exists
+  tags: [deploy, system, zram, phase0]
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+  tags: [deploy, system, zram, phase0]
+
+- name: Read current active swap devices
+  ansible.builtin.command: /usr/sbin/swapon --show --noheadings --output NAME,PRIO
+  register: current_swap_devices
+  changed_when: false
+  tags: [deploy, system, zram, phase0]
+
+- name: Parse current zram state
+  ansible.builtin.set_fact:
+    zram_package_installed: "{{ zram_package_status.rc == 0 and ('install ok installed' in zram_package_status.stdout) }}"
+    zram_config_exists: "{{ zramswap_config_stat.stat.exists | default(false) }}"
+    zram_config_content: "{{ (zramswap_config_raw.content | b64decode) if zramswap_config_stat.stat.exists else '' }}"
+    zram_service_present: "{{ 'zramswap.service' in (ansible_facts.services | default({})) }}"
+    zram_service_enabled: "{{ (ansible_facts.services['zramswap.service'].status == 'enabled') if ('zramswap.service' in (ansible_facts.services | default({}))) else false }}"
+    zram_active_device_lines: "{{ current_swap_devices.stdout_lines | select('search', '^/dev/zram') | list }}"
+    zram_active_before_deploy: "{{ (current_swap_devices.stdout_lines | select('search', '^/dev/zram') | list | length) > 0 }}"
+  tags: [deploy, system, zram, phase0]
+
+- name: Debug zram decision
+  ansible.builtin.debug:
+    msg: "RAM={{ _actual_ram_mb }} AutoDisabled={{ _zram_auto_disabled }} PackageInstalled={{ zram_package_installed }} ConfigExists={{ zram_config_exists }} ServiceEnabled={{ zram_service_enabled }} ActiveBefore={{ zram_active_before_deploy }} CheckMode={{ ansible_check_mode }}"
+  tags: [deploy, system, zram, phase0]

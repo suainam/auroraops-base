@@ -1,0 +1,137 @@
+- name: Build desired sysctl plan
+  ansible.builtin.import_tasks: build_desired_sysctl.yml
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Check existing sysctl baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_fact_path }}"
+  register: sysctl_fact_stat
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Read existing sysctl baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ sysctl_fact_path }}"
+  register: sysctl_fact_raw
+  when: sysctl_fact_stat.stat.exists
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Parse existing sysctl baseline
+  ansible.builtin.set_fact:
+    sysctl_baseline: "{{ sysctl_fact_raw.content | b64decode | from_json }}"
+  when: sysctl_fact_stat.stat.exists
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Validate managed sysctl baseline metadata
+  ansible.builtin.assert:
+    that:
+      - sysctl_baseline.auroraops_managed | default(false) | bool
+      - sysctl_baseline.version | default(0) | int >= 1
+      - sysctl_baseline.sysctl_managed_file == sysctl_managed_file
+      - sysctl_baseline.pre_deploy_values is defined
+      - sysctl_baseline.pre_deploy_module_files is defined
+    fail_msg: "Existing sysctl baseline is invalid"
+  when: sysctl_fact_stat.stat.exists
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Check current managed sysctl file state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_managed_file }}"
+  register: sysctl_managed_file_stat
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Read current managed sysctl file
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ sysctl_managed_file }}"
+  register: sysctl_managed_file_raw
+  when: sysctl_managed_file_stat.stat.exists
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Adopt legacy managed sysctl file as rollback baseline
+  ansible.builtin.debug:
+    msg: "Adopting existing {{ sysctl_managed_file }} as pre-deploy baseline because no sysctl baseline exists yet."
+  when:
+    - not sysctl_fact_stat.stat.exists
+    - sysctl_managed_file_stat.stat.exists
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Check current managed module persist files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
+  loop: "{{ sysctl_available_modules }}"
+  register: sysctl_module_file_stats
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Refuse unmanaged pre-existing module persist files
+  ansible.builtin.fail:
+    msg: "Found unmanaged pre-existing {{ item.stat.path }}. Manual confirmation required before AuroraOps can manage it."
+  loop: "{{ sysctl_module_file_stats.results }}"
+  when:
+    - not sysctl_fact_stat.stat.exists
+    - item.stat.exists | default(false)
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Read current sysctl values
+  become: true
+  check_mode: false
+  ansible.builtin.command: "sysctl -n {{ item.key }}"
+  loop: "{{ final_sysctl_params | dict2items }}"
+  register: current_sysctl_value_checks
+  changed_when: false
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Assemble current sysctl values
+  ansible.builtin.set_fact:
+    current_sysctl_values: "{{ dict(current_sysctl_value_checks.results | map(attribute='item.key') | zip(current_sysctl_value_checks.results | map(attribute='stdout'))) }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Read current module persist file contents
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ item.stat.path }}"
+  loop: "{{ sysctl_module_file_stats.results }}"
+  register: sysctl_module_file_raw
+  when: item.stat.exists | default(false)
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Assemble current module persist baseline
+  ansible.builtin.set_fact:
+    current_module_file_baseline: >-
+      {{
+        current_module_file_baseline | default({}) |
+        combine({
+          item.item.item: {
+            'path': item.item.stat.path,
+            'exists': true,
+            'content': item.content | b64decode
+          }
+        })
+      }}
+  loop: "{{ sysctl_module_file_raw.results | default([]) }}"
+  when: not (item.skipped | default(false))
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Fill absent module persist baseline
+  ansible.builtin.set_fact:
+    current_module_file_baseline: >-
+      {{
+        current_module_file_baseline | default({}) |
+        combine({
+          item.item: {
+            'path': sysctl_module_persist_dir ~ '/99-auroraops-' ~ item.item ~ '.conf',
+            'exists': item.stat.exists | default(false),
+            'content': ''
+          }
+        }, recursive=True)
+      }}
+  loop: "{{ sysctl_module_file_stats.results }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Debug sysctl decision
+  ansible.builtin.debug:
+    msg: "ManagedKeys={{ final_sysctl_params.keys() | list | length }} AvailableModules={{ sysctl_available_modules | join(',') }} BaselineExists={{ sysctl_fact_stat.stat.exists }} CheckMode={{ ansible_check_mode }}"
+  tags: [deploy, system, sysctl, phase0]

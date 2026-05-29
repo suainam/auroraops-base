@@ -1,0 +1,15 @@
+---
+zerotier_network_id: ""
+zerotier_port: 9993
+zerotier_api_url: "https://my.zerotier.com"
+zerotier_enable_moon: false
+zerotier_package_name: "zerotier-one"
+zerotier_service_name: "zerotier-one"
+zerotier_fact_path: "/etc/ansible/facts.d/zerotier.fact"
+zerotier_repo_path: "/etc/apt/sources.list.d/zerotier.list"
+zerotier_keyring_path: "/etc/apt/keyrings/zerotier.gpg"
+zerotier_moon_json_path: "/var/lib/zerotier-one/moon.json"
+zerotier_moons_dir_path: "/var/lib/zerotier-one/moons.d"
+
+zerotier_environment_proxy: {}
+

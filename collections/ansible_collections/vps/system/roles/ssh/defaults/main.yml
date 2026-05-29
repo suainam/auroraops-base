@@ -1,0 +1,35 @@
+---
+ssh_fact_path: /etc/ansible/facts.d/ssh.fact
+ssh_main_config_path: /etc/ssh/sshd_config
+ssh_managed_dropin_dir: /etc/ssh/sshd_config.d
+ssh_managed_dropin_path: /etc/ssh/sshd_config.d/99-ansible.conf
+ssh_package_name: openssh-server
+
+# Ansible 连接参数 (动态复用 ssh_port)
+ansible_port: "{{ ssh_port }}"
+
+# Mitogen Host Key Checking (由于 ansible.cfg 配置对其无效，必须在此显式关闭)
+ansible_host_key_checking: false
+ansible_ssh_host_key_checking: false
+
+ssh_permit_root_login: "prohibit-password"
+ssh_password_authentication: "no"
+ssh_pubkey_authentication: "yes"
+ssh_service_name: "ssh"
+
+# SSH Connection Optimization
+ssh_client_alive_interval: 60
+ssh_client_alive_count_max: 3
+ssh_use_dns: "no"
+ssh_gssapi_authentication: "no"
+
+# Session Hardening
+ssh_max_auth_tries: 3
+ssh_login_grace_time: 45
+
+# Cosmetic/Interactive Delays
+ssh_print_motd: "no"
+ssh_print_last_log: "no"
+
+# Traffic/QoS
+ssh_ipqos: "lowdelay throughput"

@@ -1,0 +1,93 @@
+sysctl_fact_path: /etc/ansible/facts.d/sysctl.fact
+sysctl_managed_file: /etc/sysctl.d/99-auroraops.conf
+sysctl_module_persist_dir: /etc/modules-load.d
+sysctl_managed_modules:
+  - nf_conntrack
+  - tcp_bbr2
+
+sysctl_params:
+  # --- Network Stack: Performance & Congestion ---
+  # Debian 13 默认内核暂不支持 BBR2 (需 5.10+ Google Patch 或特定内核)
+  # 角色已集成回退逻辑：若不支持 bbr2 则自动切换至 bbr
+  net.core.default_qdisc: fq
+  net.ipv4.tcp_congestion_control: bbr2
+  net.ipv4.tcp_fastopen: 3
+  net.ipv4.tcp_mtu_probing: 1
+
+  # --- Network Stack: Buffers (Optimized for 100ms+ latency & high throughput) ---
+  # 针对跨国链路，将最大缓冲区提升至 32MB 以填满长肥管道
+  net.core.rmem_max: 33554432
+  net.core.wmem_max: 33554432
+  net.ipv4.tcp_rmem: "4096 87380 33554432"
+  net.ipv4.tcp_wmem: "4096 65536 33554432"
+
+  # --- Network Stack: Backlog/Queues ---
+  net.core.somaxconn: 8192
+  net.core.netdev_max_backlog: 10000
+
+  # --- Network Stack: Security Hardening ---
+  # 禁用 ICMP 重定向，防止路由欺骗
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv6.conf.all.accept_redirects: 0
+  net.ipv6.conf.default.accept_redirects: 0
+  
+  # 保护对内核指针的访问 (协助缓解内核漏洞利用)
+  kernel.kptr_restrict: 2
+  # 限制对内核日志的访问
+  kernel.dmesg_restrict: 1
+
+  # 禁止作为路由器转发重定向报文
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+
+  # 忽略广播 ICMP Echo 请求 (防止 Smurf 攻击)
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+
+  # 开启 SYN Cookie 防御 SYN Flood
+  net.ipv4.tcp_syncookies: 1
+
+  # 开启 RFC 1337 TIME-WAIT Assassination 保护
+  net.ipv4.tcp_rfc1337: 1
+
+  # --- Docker & Containerization Optimizations ---
+  # 提升连接追踪上限，防止大量容器 NAT 导致 table full
+  net.netfilter.nf_conntrack_max: 1048576
+  # 提升 Inotify 实例和监控数，适配容器内多文件监听需求
+  fs.inotify.max_user_instances: 1024
+  fs.inotify.max_user_watches: 524288
+  # 允许容器与宿主机 localhost 进行通信
+  net.ipv4.conf.all.route_localnet: 1
+
+  # --- Memory & Stability ---
+  # ZRAM 优化: 适当提高 swappiness 以利用压缩内存 (ZRAM)，释放物理内存给缓存
+  # 如果仅使用磁盘 Swap，建议设为 10；配合 ZRAM 建议 60-100
+  vm.swappiness: 60
+  
+  # 更积极地回收 inode/dentry 缓存，防止长时间运行后元数据耗尽内存
+  vm.vfs_cache_pressure: 200
+  
+  # ZRAM/SSD 优化: 禁用 Swap 预读 (减少读取延迟，因为 ZRAM/SSD 无需寻道)
+  vm.page-cluster: 0
+  
+  # 预留 64MB 内存防止内核原子操作因内存不足失败 (导致网络卡顿)
+  vm.min_free_kbytes: 65536
+
+  vm.dirty_ratio: 40
+  vm.dirty_background_ratio: 3
+
+  vm.dirty_expire_centisecs: 6000
+  vm.dirty_writeback_centisecs: 1500
+  kernel.panic: 10
+  # 适配 Elasticsearch 等需要大量内存映射的应用
+  vm.max_map_count: 262144
+
+# --- Hardening Profile: Virt-specific ---
+sysctl_hardening_baremetal:
+  # 裸金属特有安全增强 (例如 Intel ME/MCE 相关的内核参数)
+  kernel.perf_event_paranoid: 3
+  kernel.unprivileged_userns_clone: 0
+
+sysctl_hardening_kvm:
+  # KVM 虚拟机优化与安全平衡
+  kernel.perf_event_paranoid: 2

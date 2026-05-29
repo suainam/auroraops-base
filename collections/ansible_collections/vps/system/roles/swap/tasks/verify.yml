@@ -1,0 +1,93 @@
+- name: Gather memory facts for verification
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  tags: [verify, system, swap, phase0]
+
+- name: Compute desired swap bytes for verification
+  ansible.builtin.include_tasks: compute_desired_swap.yml
+  tags: [verify, system, swap, phase0]
+
+- name: Check swap baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ swap_fact_path }}"
+  register: swap_fact_stat
+  tags: [verify, system, swap, phase0]
+
+- name: Verify swap baseline exists
+  ansible.builtin.assert:
+    that:
+      - swap_fact_stat.stat.exists
+    fail_msg: "Swap baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, swap, phase0, swap_verify_baseline]
+
+- name: Read swap baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ swap_fact_path }}"
+  register: swap_fact_raw
+  tags: [verify, system, swap, phase0]
+
+- name: Parse swap baseline
+  ansible.builtin.set_fact:
+    swap_baseline: "{{ swap_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, swap, phase0]
+
+- name: Verify swap baseline metadata
+  ansible.builtin.assert:
+    that:
+      - swap_baseline.auroraops_managed | default(false) | bool
+      - swap_baseline.swapfile_path == swapfile_path
+      - swap_baseline.pre_deploy_devices is defined
+      - swap_baseline.pre_deploy_active_devices is defined
+      - swap_baseline.pre_deploy_fstab_line is defined
+    fail_msg: "Swap baseline content is invalid"
+  tags: [verify, system, swap, phase0, swap_verify_baseline]
+
+- name: Verify managed swapfile exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ swapfile_path }}"
+  register: swapfile_stat
+  failed_when: not swapfile_stat.stat.exists
+  tags: [verify, system, swap, phase0, swap_verify_file_exists]
+
+- name: Verify managed swapfile size
+  ansible.builtin.assert:
+    that:
+      - swapfile_stat.stat.size == (desired_bytes | int)
+    fail_msg: "Swap file size mismatch (expected {{ desired_bytes | int }}, got {{ swapfile_stat.stat.size }})"
+  tags: [verify, system, swap, phase0, swap_verify_file_size]
+
+- name: Read active swap devices for verification
+  ansible.builtin.command: cat /proc/swaps
+  register: current_swaps
+  changed_when: false
+  tags: [verify, system, swap, phase0]
+
+- name: Parse active swap device names for verification
+  ansible.builtin.set_fact:
+    current_swap_names: "{{ (current_swaps.stdout_lines[1:] | default([])) | map('split') | map('first') | list }}"
+  tags: [verify, system, swap, phase0]
+
+- name: Verify managed swapfile is active
+  ansible.builtin.assert:
+    that:
+      - swapfile_path in current_swap_names
+    fail_msg: "Managed swapfile is not active"
+  tags: [verify, system, swap, phase0, swap_verify_active]
+
+- name: Read fstab for verification
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/fstab
+  register: fstab_raw
+  tags: [verify, system, swap, phase0]
+
+- name: Verify managed swapfile fstab entry
+  ansible.builtin.assert:
+    that:
+      - ((fstab_raw.content | b64decode | regex_findall('(?m)^' ~ (swapfile_path | regex_escape) ~ '\\s+.*$')) | length) > 0
+    fail_msg: "Managed swapfile fstab entry is missing"
+  tags: [verify, system, swap, phase0, swap_verify_fstab]

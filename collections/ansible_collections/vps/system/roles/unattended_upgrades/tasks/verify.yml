@@ -1,0 +1,57 @@
+---
+- name: Gather package facts for unattended_upgrades verify
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [verify, system, unattended_upgrades, phase1]
+
+- name: Check if 50unattended-upgrades config exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_config_path }}"
+  register: unattended_upgrades_config
+  tags: [verify, system, unattended_upgrades, phase1]
+
+- name: Check if 20auto-upgrades config exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_auto_upgrades_path }}"
+  register: auto_upgrades_config
+  tags: [verify, system, unattended_upgrades, phase1]
+
+- name: Check if unattended_upgrades baseline exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_fact_path }}"
+  register: unattended_upgrades_fact
+  tags: [verify, system, unattended_upgrades, phase1]
+
+- name: Check if unattended-upgrades is enabled
+  become: true
+  ansible.builtin.command: systemctl is-enabled {{ unattended_upgrades_service_name }}
+  register: systemctl_enabled_status
+  changed_when: false
+  failed_when: systemctl_enabled_status.rc != 0
+  tags: [verify, system, unattended_upgrades, phase1]
+
+- name: Check if unattended-upgrades is active
+  become: true
+  ansible.builtin.command: systemctl is-active {{ unattended_upgrades_service_name }}
+  register: systemctl_active_status
+  changed_when: false
+  failed_when: systemctl_active_status.rc != 0
+  tags: [verify, system, unattended_upgrades, phase1]
+
+- name: Assert unattended-upgrades is properly configured
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.packages[unattended_upgrades_package_name] is defined
+      - ansible_facts.packages[unattended_upgrades_listchanges_package_name] is defined
+      - unattended_upgrades_config.stat.exists
+      - auto_upgrades_config.stat.exists
+      - unattended_upgrades_fact.stat.exists
+      - "'enabled' in systemctl_enabled_status.stdout"
+      - "'active' in systemctl_active_status.stdout"
+    success_msg: "unattended-upgrades is enabled, active, and baseline-backed"
+    fail_msg: "unattended-upgrades is not properly enabled/active"
+  tags: [verify, system, unattended_upgrades, phase1]

@@ -1,0 +1,4 @@
+swap_multiplier: 2.0
+swapfile_path: /swapfile
+swap_fact_path: /etc/ansible/facts.d/swap.fact
+swapfile_priority: 10

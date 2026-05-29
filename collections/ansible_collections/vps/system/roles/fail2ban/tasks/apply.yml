@@ -1,0 +1,94 @@
+---
+- name: Ensure facts.d directory exists for fail2ban baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Persist pre-deploy fail2ban baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ fail2ban_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "jail_local_path": fail2ban_jail_local_path,
+          "pre_deploy_package_installed": fail2ban_preflight.package_installed,
+          "pre_deploy_service_enabled": fail2ban_preflight.service_enabled,
+          "pre_deploy_service_running": fail2ban_preflight.service_running,
+          "pre_deploy_jail_local_exists": fail2ban_preflight.jail_local_exists,
+          "pre_deploy_jail_local_content": fail2ban_preflight.jail_local_content
+        } | to_nice_json
+      }}
+  when: not fail2ban_fact_stat.stat.exists
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Read apt sources list for fail2ban install
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/apt/sources.list
+  register: fail2ban_apply_sources_raw
+  when: not fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Write sanitized apt sources list for fail2ban install
+  become: true
+  ansible.builtin.copy:
+    dest: /tmp/auroraops-fail2ban-sources.list
+    mode: "0644"
+    content: "{{ (fail2ban_apply_sources_raw.content | b64decode) | regex_replace('(?m)^deb cdrom:.*\\n?', '') }}"
+  when: not fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Refresh apt package lists for fail2ban install
+  become: true
+  ansible.builtin.command:
+    cmd: apt-get -o Dir::Etc::sourcelist=/tmp/auroraops-fail2ban-sources.list -o Dir::Etc::sourceparts=- update
+  when: not fail2ban_preflight.package_installed | bool
+  changed_when: false
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Ensure fail2ban package is installed
+  become: true
+  ansible.builtin.command:
+    cmd: apt-get -o Dir::Etc::sourcelist=/tmp/auroraops-fail2ban-sources.list -o Dir::Etc::sourceparts=- install -y --no-install-recommends {{ fail2ban_package_name }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: fail2ban_install_result
+  changed_when: fail2ban_install_result.rc == 0
+  when: not fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Ensure fail2ban package is installed when already present
+  ansible.builtin.debug:
+    msg: "fail2ban package already installed; skipping apt install path"
+  when: fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Deploy fail2ban jail.local
+  become: true
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: "{{ fail2ban_jail_local_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Ensure fail2ban service is enabled and started
+  become: true
+  ansible.builtin.service:
+    name: "{{ fail2ban_service_name }}"
+    enabled: true
+    state: started
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Flush fail2ban handlers after apply
+  ansible.builtin.meta: flush_handlers
+  tags: [deploy, system, fail2ban, phase1]

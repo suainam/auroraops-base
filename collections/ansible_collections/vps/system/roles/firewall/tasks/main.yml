@@ -1,0 +1,45 @@
+- name: 合并 Firewall TCP 端口列表
+  ansible.builtin.include_tasks: ../../../common/tasks/merge_list_vars.yml
+  vars:
+    merge_var_name: firewall_tcp_ports
+  tags:
+  - always
+  - deploy
+  - system
+  - firewall
+- name: 合并 Firewall UDP 端口列表
+  ansible.builtin.include_tasks: ../../../common/tasks/merge_list_vars.yml
+  vars:
+    merge_var_name: firewall_udp_ports
+  tags:
+  - always
+  - deploy
+  - system
+  - firewall
+
+- name: Build effective firewall allow lists
+  ansible.builtin.set_fact:
+    firewall_effective_tcp_ports: "{{ ((firewall_tcp_ports | default([])) + [ssh_port]) | map('string') | unique | sort }}"
+    firewall_effective_udp_ports: "{{ (firewall_udp_ports | default([])) | map('string') | unique | sort }}"
+  tags:
+  - always
+  - deploy
+  - system
+  - firewall
+
+- name: Run firewall preflight
+  ansible.builtin.import_tasks: preflight.yml
+  tags:
+  - deploy
+  - system
+  - firewall
+  - phase1
+
+- name: Apply managed firewall changes
+  ansible.builtin.import_tasks: apply.yml
+  when: not ansible_check_mode
+  tags:
+  - deploy
+  - system
+  - firewall
+  - phase1

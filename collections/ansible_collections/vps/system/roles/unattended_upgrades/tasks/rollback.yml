@@ -1,0 +1,152 @@
+---
+- name: Check unattended_upgrades baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_fact_path }}"
+  register: unattended_upgrades_fact_stat
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: No managed unattended_upgrades state to rollback
+  ansible.builtin.debug:
+    msg: "No unattended_upgrades baseline found, skipping rollback"
+  when: not unattended_upgrades_fact_stat.stat.exists
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Read unattended_upgrades baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ unattended_upgrades_fact_path }}"
+  register: unattended_upgrades_fact_raw
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Parse unattended_upgrades baseline for rollback
+  ansible.builtin.set_fact:
+    unattended_upgrades_baseline: "{{ unattended_upgrades_fact_raw.content | b64decode | from_json }}"
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Validate unattended_upgrades baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - unattended_upgrades_baseline.auroraops_managed | default(false) | bool
+      - unattended_upgrades_baseline.version | default(0) | int >= 1
+      - unattended_upgrades_baseline.config_path == unattended_upgrades_config_path
+      - unattended_upgrades_baseline.auto_upgrades_path == unattended_upgrades_auto_upgrades_path
+      - unattended_upgrades_baseline.pre_deploy_config_exists is defined
+      - unattended_upgrades_baseline.pre_deploy_config_content is defined
+      - unattended_upgrades_baseline.pre_deploy_auto_upgrades_exists is defined
+      - unattended_upgrades_baseline.pre_deploy_auto_upgrades_content is defined
+      - unattended_upgrades_baseline.pre_deploy_package_installed is defined
+      - unattended_upgrades_baseline.pre_deploy_listchanges_installed is defined
+      - unattended_upgrades_baseline.pre_deploy_service_enabled is defined
+      - unattended_upgrades_baseline.pre_deploy_service_running is defined
+    fail_msg: "unattended_upgrades baseline content is invalid for rollback"
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Restore pre-deploy unattended_upgrades config
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ unattended_upgrades_config_path }}"
+    content: "{{ unattended_upgrades_baseline.pre_deploy_config_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - unattended_upgrades_baseline.pre_deploy_config_exists | bool
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Remove unattended_upgrades config when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ unattended_upgrades_config_path }}"
+    state: absent
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - not (unattended_upgrades_baseline.pre_deploy_config_exists | bool)
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Restore pre-deploy auto-upgrades config
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ unattended_upgrades_auto_upgrades_path }}"
+    content: "{{ unattended_upgrades_baseline.pre_deploy_auto_upgrades_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - unattended_upgrades_baseline.pre_deploy_auto_upgrades_exists | bool
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Remove auto-upgrades config when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ unattended_upgrades_auto_upgrades_path }}"
+    state: absent
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - not (unattended_upgrades_baseline.pre_deploy_auto_upgrades_exists | bool)
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Restore unattended-upgrades service state
+  become: true
+  ansible.builtin.service:
+    name: "{{ unattended_upgrades_service_name }}"
+    enabled: "{{ unattended_upgrades_baseline.pre_deploy_service_enabled | bool }}"
+    state: "{{ 'started' if unattended_upgrades_baseline.pre_deploy_service_running | bool else 'stopped' }}"
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - unattended_upgrades_baseline.pre_deploy_package_installed | bool
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Stop unattended-upgrades service before package removal
+  become: true
+  ansible.builtin.service:
+    name: "{{ unattended_upgrades_service_name }}"
+    enabled: false
+    state: stopped
+  failed_when: false
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - not (unattended_upgrades_baseline.pre_deploy_package_installed | bool)
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Remove unattended-upgrades package when absent before deploy
+  become: true
+  ansible.builtin.package:
+    name: "{{ unattended_upgrades_package_name }}"
+    state: absent
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - not (unattended_upgrades_baseline.pre_deploy_package_installed | bool)
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Reload systemd after unattended-upgrades package removal
+  become: true
+  ansible.builtin.command: systemctl daemon-reload
+  changed_when: false
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - not (unattended_upgrades_baseline.pre_deploy_package_installed | bool)
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Remove apt-listchanges package when absent before deploy
+  become: true
+  ansible.builtin.package:
+    name: "{{ unattended_upgrades_listchanges_package_name }}"
+    state: absent
+  when:
+    - unattended_upgrades_fact_stat.stat.exists
+    - not (unattended_upgrades_baseline.pre_deploy_listchanges_installed | bool)
+  tags: [rollback, system, unattended_upgrades, phase1]
+
+- name: Remove unattended_upgrades baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ unattended_upgrades_fact_path }}"
+    state: absent
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [rollback, system, unattended_upgrades, phase1]

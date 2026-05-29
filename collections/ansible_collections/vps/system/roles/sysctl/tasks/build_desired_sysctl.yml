@@ -1,0 +1,116 @@
+- name: Check which kernel modules are available
+  check_mode: false
+  ansible.builtin.shell: "modinfo {{ item }} >/dev/null 2>&1"
+  loop: "{{ sysctl_managed_modules }}"
+  register: sysctl_module_check
+  changed_when: false
+  failed_when: false
+  tags: [deploy, verify, system, sysctl, phase0]
+
+- name: Gather currently loaded kernel modules
+  check_mode: false
+  ansible.builtin.command: lsmod
+  register: sysctl_lsmod
+  changed_when: false
+  tags: [deploy, verify, system, sysctl, phase0]
+
+- name: Parse module availability and loaded state
+  ansible.builtin.set_fact:
+    sysctl_available_modules: "{{ sysctl_module_check.results | selectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+    sysctl_loaded_modules_before: >-
+      {{
+        sysctl_lsmod.stdout_lines[1:] | default([])
+        | map('split')
+        | map('first')
+        | list
+      }}
+  tags: [deploy, verify, system, sysctl, phase0]
+
+- name: Combine default and custom sysctl params
+  ansible.builtin.set_fact:
+    final_sysctl_params: "{{ sysctl_params | combine(sysctl_custom_params | default({})) }}"
+  tags: [deploy, verify, system, sysctl, always, phase0]
+
+- name: Check which sysctl keys exist on target
+  ansible.builtin.stat:
+    path: "/proc/sys/{{ item.key | replace('.', '/') }}"
+  loop: "{{ final_sysctl_params | dict2items }}"
+  register: sysctl_key_stats
+  tags: [deploy, verify, system, sysctl, always, phase0]
+
+- name: Filter unsupported sysctl keys
+  ansible.builtin.set_fact:
+    final_sysctl_params: >-
+      {{
+        dict(
+          sysctl_key_stats.results
+          | selectattr('stat.exists', 'defined')
+          | selectattr('stat.exists')
+          | map(attribute='item')
+          | map(attribute='key')
+          | zip(
+              sysctl_key_stats.results
+              | selectattr('stat.exists', 'defined')
+              | selectattr('stat.exists')
+              | map(attribute='item')
+              | map(attribute='value')
+            )
+        )
+      }}
+    unsupported_sysctl_keys: >-
+      {{
+        sysctl_key_stats.results
+        | rejectattr('stat.exists', 'defined')
+        | map(attribute='item.key')
+        | list
+        +
+        (
+          sysctl_key_stats.results
+          | selectattr('stat.exists', 'defined')
+          | rejectattr('stat.exists')
+          | map(attribute='item.key')
+          | list
+        )
+      }}
+  tags: [deploy, verify, system, sysctl, always, phase0]
+
+- name: Debug unsupported sysctl keys
+  ansible.builtin.debug:
+    msg: "Skipping unsupported sysctl keys: {{ unsupported_sysctl_keys | join(', ') }}"
+  when: (unsupported_sysctl_keys | default([])) | length > 0
+  tags: [deploy, verify, system, sysctl, always, phase0]
+
+- name: Apply Virt-specific Hardening
+  ansible.builtin.set_fact:
+    final_sysctl_params: "{{ final_sysctl_params | combine(sysctl_hardening_baremetal if (performance.hardware.virt_type | default('') == 'baremetal' or ansible_local.performance.hardware.virt_type | default('') == 'baremetal') else sysctl_hardening_kvm) }}"
+  when:
+    - performance.hardware.virt_type | default(ansible_local.performance.hardware.virt_type | default('')) != ''
+  tags: [deploy, verify, system, sysctl, phase1]
+
+- name: Calculate Dynamic BDP Buffers
+  ansible.builtin.set_fact:
+    _benchmark_latency: "{{ performance.network.latency_ms | default(ansible_local.performance.network.latency_ms | default(0)) }}"
+  tags: [deploy, verify, system, sysctl, phase0]
+
+- name: Apply Dynamic BDP Buffers (High RTT Links Only)
+  ansible.builtin.set_fact:
+    dynamic_tcp_rmem: "4096 87380 {{ [((_benchmark_latency | float) / 1000 * 125000000 * 1.5) | int, 33554432] | max }}"
+    dynamic_tcp_wmem: "4096 65536 {{ [((_benchmark_latency | float) / 1000 * 125000000 * 1.5) | int, 33554432] | max }}"
+  when: (_benchmark_latency | default(0) | int) > 50
+  tags: [deploy, verify, system, sysctl, phase0]
+
+- name: Apply Dynamic BDP to sysctl params
+  ansible.builtin.set_fact:
+    final_sysctl_params: "{{ final_sysctl_params | combine({'net.ipv4.tcp_rmem': dynamic_tcp_rmem, 'net.ipv4.tcp_wmem': dynamic_tcp_wmem, 'net.core.rmem_max': (dynamic_tcp_rmem.split()[-1] | int), 'net.core.wmem_max': (dynamic_tcp_wmem.split()[-1] | int)}) }}"
+  when: dynamic_tcp_rmem is defined
+  tags: [deploy, verify, system, sysctl, phase0]
+
+- name: Set fallback to bbr if bbr2 is not available
+  ansible.builtin.set_fact:
+    final_sysctl_params: "{{ final_sysctl_params | combine({'net.ipv4.tcp_congestion_control': 'bbr'}) }}"
+  vars:
+    bbr2_available: "{{ 'tcp_bbr2' in sysctl_available_modules }}"
+  when:
+    - final_sysctl_params['net.ipv4.tcp_congestion_control'] | default('') == 'bbr2'
+    - not bbr2_available
+  tags: [deploy, verify, system, sysctl, phase0]

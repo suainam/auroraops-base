@@ -1,0 +1,7 @@
+---
+hostname: my-vps
+ssh_port: 22
+ansible_user: root
+use_domestic_mirrors: false
+docker__users:
+  - admin

@@ -1,0 +1,28 @@
+
+  - name: Allow configured TCP ports
+    become: yes
+    community.general.ufw:
+      rule: allow
+      port: "{{ item | string }}"
+      proto: tcp
+    loop: "{{ firewall_effective_tcp_ports }}"
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Allow configured UDP ports
+    become: yes
+    community.general.ufw:
+      rule: allow
+      port: "{{ item | string }}"
+      proto: udp
+    loop: "{{ firewall_effective_udp_ports }}"
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Allow Hysteria Hopping UDP range
+    become: yes
+    community.general.ufw:
+      rule: allow
+      port: "{{ firewall_hysteria_hopping.port_range }}"
+      proto: udp
+    when: 
+      - firewall_hysteria_hopping.enabled
+    tags: [deploy, system, firewall, phase1, firewall_apply]

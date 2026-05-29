@@ -1,0 +1,7 @@
+---
+logrotate_fact_path: /etc/ansible/facts.d/logrotate.fact
+logrotate_managed_file: /etc/logrotate.conf
+logrotate_managed_dir: /etc/logrotate.d
+logrotate_rotate_count: 3
+logrotate_enable_compress: true
+logrotate_configs_to_deploy: []

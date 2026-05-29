@@ -1,0 +1,286 @@
+- name: Determine mirror usage based on Geo-IP
+  ansible.builtin.set_fact:
+    use_domestic_mirrors: >-
+      {{
+        performance.geo.country | default(ansible_local.performance.geo.country | default('')) == 'CN'
+      }}
+  when: use_domestic_mirrors is not defined
+  tags: [deploy, system, init, phase0]
+
+- name: Bootstrap init with system Python interpreter
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /usr/bin/python3
+  tags: [deploy, system, init, phase0]
+
+- name: Gather init distribution facts
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - distribution
+  tags: [deploy, system, init, init_gather_facts, phase0]
+
+- name: Check init baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ init_fact_path }}"
+  register: init_fact_stat
+  tags: [deploy, system, init, phase0]
+
+- name: Read init baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ init_fact_path }}"
+  register: init_fact_raw
+  when: init_fact_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Parse init baseline
+  ansible.builtin.set_fact:
+    init_baseline: "{{ init_fact_raw.content | b64decode | from_json }}"
+  when: init_fact_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Normalize legacy init baseline fields
+  ansible.builtin.set_fact:
+    init_baseline: >-
+      {{
+        init_baseline | combine({
+          'pre_deploy_resolv_exists': init_baseline.pre_deploy_resolv_exists | default(init_resolv_stat.stat.exists | default(false)),
+          'pre_deploy_resolv_content': init_baseline.pre_deploy_resolv_content | default(init_resolv_content | default('')),
+          'pre_deploy_has_nameserver': init_baseline.pre_deploy_has_nameserver | default(init_has_nameserver | default(false))
+        }, recursive=True)
+      }}
+  when: init_fact_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Validate supported OS for init
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution in ['Debian', 'Linux Mint']
+    fail_msg: "init currently supports Debian and Linux Mint only; got {{ ansible_distribution }} {{ ansible_distribution_version }}"
+  tags: [deploy, system, init, phase0]
+
+- name: Check current sources.list presence
+  become: true
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: init_sources_stat
+  tags: [deploy, system, init, phase0]
+
+- name: Read current sources.list
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/apt/sources.list
+  register: init_sources_raw
+  when: init_sources_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Parse current sources.list content
+  ansible.builtin.set_fact:
+    init_sources_content: "{{ init_sources_raw.content | b64decode }}"
+  when: init_sources_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Check current resolv.conf presence
+  become: true
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+  register: init_resolv_stat
+  tags: [deploy, system, init, phase0]
+
+- name: Read current resolv.conf
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/resolv.conf
+  register: init_resolv_raw
+  when: init_resolv_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Parse current resolv.conf content
+  ansible.builtin.set_fact:
+    init_resolv_content: "{{ init_resolv_raw.content | b64decode }}"
+  when: init_resolv_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Detect current nameserver lines
+  ansible.builtin.set_fact:
+    init_has_nameserver: "{{ ((init_resolv_content | default('')) | regex_findall('(?m)^nameserver\\s+')) | length > 0 }}"
+  tags: [deploy, system, init, phase0]
+
+- name: Detect current cdrom apt entries
+  ansible.builtin.set_fact:
+    init_has_cdrom_source: "{{ 'deb cdrom:' in (init_sources_content | default('')) }}"
+  tags: [deploy, system, init, phase0]
+
+- name: Collect package facts for init
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [deploy, system, init, phase0]
+
+- name: Build init package install baseline
+  ansible.builtin.set_fact:
+    init_managed_packages: "{{ init_packages }}"
+    init_preinstalled_packages: >-
+      {{
+        init_packages
+        | select('in', ansible_facts.packages.keys() | list)
+        | list
+      }}
+  tags: [deploy, system, init, phase0]
+
+- name: Resolve effective apt hostnames
+  ansible.builtin.set_fact:
+    init_primary_apt_host: "{{ init_effective_apt_mirror_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
+    init_security_apt_host: "{{ init_effective_apt_security_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, phase0]
+
+- name: Probe effective apt mirror DNS
+  ansible.builtin.command: "getent ahosts {{ item }}"
+  loop:
+    - "{{ init_primary_apt_host }}"
+    - "{{ init_security_apt_host }}"
+  register: init_dns_checks
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, phase0]
+
+- name: Resolve fallback apt hostnames
+  ansible.builtin.set_fact:
+    init_fallback_primary_apt_host: "{{ init_fallback_apt_mirror_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
+    init_fallback_security_apt_host: "{{ init_fallback_apt_security_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, phase0]
+
+- name: Probe fallback apt mirror DNS
+  ansible.builtin.command: "getent ahosts {{ item }}"
+  loop:
+    - "{{ init_fallback_primary_apt_host }}"
+    - "{{ init_fallback_security_apt_host }}"
+  register: init_fallback_dns_checks
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, phase0]
+
+- name: Select apt source strategy
+  ansible.builtin.set_fact:
+    init_apt_mirror_dns_ok: >-
+      {{
+        (
+          init_dns_checks.results | default([])
+          | rejectattr('rc', 'equalto', 0)
+          | list
+          | length
+        ) == 0
+      }}
+    init_fallback_apt_dns_ok: >-
+      {{
+        (
+          init_fallback_dns_checks.results | default([])
+          | rejectattr('rc', 'equalto', 0)
+          | list
+          | length
+        ) == 0
+      }}
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, phase0]
+
+- name: Choose apt mirror URLs for this run
+  ansible.builtin.set_fact:
+    init_selected_apt_mirror_url: >-
+      {{
+        init_effective_apt_mirror_url
+        if (init_apt_mirror_dns_ok | bool)
+        else init_fallback_apt_mirror_url
+      }}
+    init_selected_apt_security_url: >-
+      {{
+        init_effective_apt_security_url
+        if (init_apt_mirror_dns_ok | bool)
+        else init_fallback_apt_security_url
+      }}
+    init_selected_apt_strategy: >-
+      {{
+        'preferred_tsinghua'
+        if (init_apt_mirror_dns_ok | bool)
+        else ('fallback_' ~ init_fallback_apt_mirror_provider if (init_fallback_apt_dns_ok | default(false) | bool) else 'preferred_unreachable')
+      }}
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, phase0]
+
+- name: Probe configured apt mirror latency
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; host='{{ init_primary_apt_host }}'; port={{ 443 if (init_effective_apt_mirror_url is match('^https://')) else 80 }}; start=time.time(); sock=socket.create_connection((host, port), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: init_primary_ping
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Debian'
+    - init_apt_mirror_dns_ok | default(false) | bool
+  tags: [deploy, system, init, phase0]
+
+- name: Probe fallback apt mirror latency
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; host='{{ init_fallback_primary_apt_host }}'; port={{ 443 if (init_fallback_apt_mirror_url is match('^https://')) else 80 }}; start=time.time(); sock=socket.create_connection((host, port), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: init_fallback_ping
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Debian'
+    - init_fallback_apt_dns_ok | default(false) | bool
+  tags: [deploy, system, init, phase0]
+
+- name: Keep preferred source ordering when both apt mirrors are reachable
+  ansible.builtin.set_fact:
+    init_selected_apt_mirror_url: "{{ init_effective_apt_mirror_url }}"
+    init_selected_apt_security_url: "{{ init_effective_apt_security_url }}"
+    init_selected_apt_strategy: preferred_tsinghua
+  when:
+    - ansible_distribution == 'Debian'
+    - init_apt_mirror_dns_ok | default(false) | bool
+    - init_fallback_apt_dns_ok | default(false) | bool
+    - init_primary_ping.rc | default(1) == 0
+    - init_fallback_ping.rc | default(1) == 0
+    - (init_primary_ping.stdout | default('')) | length > 0
+    - (init_fallback_ping.stdout | default('')) | length > 0
+  tags: [deploy, system, init, phase0]
+
+- name: Validate existing init baseline
+  ansible.builtin.assert:
+    that:
+      - init_baseline.auroraops_managed | default(false) | bool
+      - init_baseline.version | default(0) | int >= 1
+      - init_baseline.distribution is defined
+      - init_baseline.pre_deploy_sources_exists is defined
+      - init_baseline.pre_deploy_resolv_exists is defined
+      - init_baseline.pre_deploy_resolv_content is defined
+      - init_baseline.pre_deploy_has_nameserver is defined
+      - init_baseline.preinstalled_packages is defined
+    fail_msg: "Existing init baseline is invalid"
+  when: init_fact_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Summarize init preflight
+  ansible.builtin.debug:
+    msg: >-
+      Distribution={{ ansible_distribution }} Release={{ ansible_distribution_release }}
+      BaselineExists={{ init_fact_stat.stat.exists | bool }}
+      SourcesExists={{ init_sources_stat.stat.exists | default(false) }}
+      HasCdrom={{ init_has_cdrom_source | default(false) }}
+      ResolvExists={{ init_resolv_stat.stat.exists | default(false) }}
+      HasNameserver={{ init_has_nameserver | default(false) }}
+      UseDomesticMirrors={{ use_domestic_mirrors | default(false) }}
+      AptMirrorDnsOk={{ init_apt_mirror_dns_ok | default(true) }}
+      AptFallbackDnsOk={{ init_fallback_apt_dns_ok | default(true) }}
+      AptMirrorRttMs={{ init_primary_ping.stdout | default('n/a') }}
+      AptFallbackRttMs={{ init_fallback_ping.stdout | default('n/a') }}
+      AptStrategy={{ init_selected_apt_strategy | default('n/a') }}
+  tags: [deploy, system, init, phase0]

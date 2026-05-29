@@ -1,0 +1,21 @@
+  - name: Gather memory facts
+    ansible.builtin.setup:
+      gather_subset:
+        - hardware
+    tags: [deploy, verify, system, swap, phase0]
+
+  - name: Compute desired swap bytes
+    ansible.builtin.set_fact:
+      mem_bytes: "{{ ansible_facts['memtotal_mb'] | int * 1024 * 1024 }}"
+      desired_bytes: >-
+        {{ (swap_desired_bytes
+            if (swap_desired_bytes is defined and swap_desired_bytes|int > 0)
+            else (ansible_facts['memtotal_mb'] | int * 1024 * 1024 * (swap_multiplier
+        | default(2.0)))) | int }}
+      max_bytes: "{{ 8 * 1024 * 1024 * 1024 }}" # 8 GiB
+    tags: [deploy, verify, system, swap, phase0]
+
+  - name: Clamp desired swap to 8G max
+    ansible.builtin.set_fact:
+      desired_bytes: "{{ [desired_bytes, max_bytes] | min }}"
+    tags: [deploy, verify, system, swap, phase0]

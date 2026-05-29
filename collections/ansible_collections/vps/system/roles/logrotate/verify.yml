@@ -1,0 +1,15 @@
+- name: 验证 logrotate 配置
+  become: yes
+  ansible.builtin.command: cat /etc/logrotate.conf
+  register: logrotate_conf
+  changed_when: false
+  tags: [logrotate]
+
+- name: 检查 logrotate
+  assert:
+    that:
+      - "'rotate 3' in logrotate_conf.stdout"
+      - "'compress' in logrotate_conf.stdout"
+    fail_msg: "❌ logrotate 配置未生效"
+    success_msg: "✅ logrotate 配置正确 (rotate=3, compress)"
+  tags: [logrotate]

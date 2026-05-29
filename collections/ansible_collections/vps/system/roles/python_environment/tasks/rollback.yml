@@ -1,0 +1,94 @@
+- name: Check python_environment baseline presence before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ python_environment_fact_path }}"
+  register: python_environment_fact_stat
+  tags: [rollback, system, python_environment, phase1]
+
+- name: Check canonical venv path before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ system_python_venv_path }}"
+    follow: false
+  register: python_environment_path_stat
+  tags: [rollback, system, python_environment, phase1]
+
+- name: Refuse rollback without baseline when canonical venv path still exists
+  ansible.builtin.fail:
+    msg: "python_environment baseline is missing while canonical venv path still exists"
+  when:
+    - not python_environment_fact_stat.stat.exists
+    - python_environment_path_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1]
+
+- name: No managed python_environment state to rollback
+  ansible.builtin.debug:
+    msg: "No python_environment baseline and no managed canonical venv path found, skipping rollback"
+  when:
+    - not python_environment_fact_stat.stat.exists
+    - not python_environment_path_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1]
+
+- name: Read python_environment baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ python_environment_fact_path }}"
+  register: python_environment_fact_raw
+  when: python_environment_fact_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1]
+
+- name: Parse python_environment baseline for rollback
+  ansible.builtin.set_fact:
+    python_environment_baseline: "{{ python_environment_fact_raw.content | b64decode | from_json }}"
+  when: python_environment_fact_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1]
+
+- name: Validate python_environment rollback baseline metadata
+  ansible.builtin.assert:
+    that:
+      - python_environment_baseline.auroraops_managed | default(false) | bool
+      - python_environment_baseline.version | default(0) | int >= 1
+      - python_environment_baseline.system_python_venv_path == system_python_venv_path
+      - not (python_environment_baseline.pre_deploy_path_exists | bool)
+      - python_environment_baseline.pre_deploy_pip_conf_exists is defined
+      - python_environment_baseline.pre_deploy_pip_conf_content is defined
+    fail_msg: "python_environment rollback baseline is invalid or requires unsupported restoration of pre-existing canonical path"
+  when: python_environment_fact_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1]
+
+- name: Remove managed canonical venv path
+  become: true
+  ansible.builtin.file:
+    path: "{{ system_python_venv_path }}"
+    state: absent
+  when: python_environment_fact_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1, python_environment_remove_venv]
+
+- name: Restore pre-deploy pip.conf content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ python_environment_pip_conf_path }}"
+    mode: "0644"
+    content: "{{ python_environment_baseline.pre_deploy_pip_conf_content }}"
+  when:
+    - python_environment_fact_stat.stat.exists
+    - python_environment_baseline.pre_deploy_pip_conf_exists | bool
+  tags: [rollback, system, python_environment, phase1, python_environment_restore_pip_conf]
+
+- name: Remove managed pip.conf when it did not exist before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ python_environment_pip_conf_path }}"
+    state: absent
+  when:
+    - python_environment_fact_stat.stat.exists
+    - not (python_environment_baseline.pre_deploy_pip_conf_exists | bool)
+  tags: [rollback, system, python_environment, phase1, python_environment_restore_pip_conf]
+
+- name: Remove python_environment baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ python_environment_fact_path }}"
+    state: absent
+  when: python_environment_fact_stat.stat.exists
+  tags: [rollback, system, python_environment, phase1, python_environment_remove_baseline]

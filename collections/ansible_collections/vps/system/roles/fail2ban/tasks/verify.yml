@@ -1,0 +1,104 @@
+---
+- name: Check fail2ban baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_fact_stat
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Verify fail2ban baseline exists
+  ansible.builtin.assert:
+    that:
+      - fail2ban_fact_stat.stat.exists
+    fail_msg: "fail2ban baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Read fail2ban baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_fact_raw
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Parse fail2ban baseline
+  ansible.builtin.set_fact:
+    fail2ban_baseline: "{{ fail2ban_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Verify fail2ban baseline metadata
+  ansible.builtin.assert:
+    that:
+      - fail2ban_baseline.auroraops_managed | default(false) | bool
+      - fail2ban_baseline.version | default(0) | int >= 1
+      - fail2ban_baseline.jail_local_path == fail2ban_jail_local_path
+      - fail2ban_baseline.pre_deploy_package_installed is defined
+      - fail2ban_baseline.pre_deploy_service_enabled is defined
+      - fail2ban_baseline.pre_deploy_service_running is defined
+      - fail2ban_baseline.pre_deploy_jail_local_exists is defined
+      - fail2ban_baseline.pre_deploy_jail_local_content is defined
+    fail_msg: "fail2ban baseline content is invalid"
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Gather fail2ban package facts for verify
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Assert fail2ban package is installed
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.packages[fail2ban_package_name] is defined
+    fail_msg: "fail2ban package is not installed"
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Gather fail2ban service facts for verify
+  become: true
+  ansible.builtin.service_facts:
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Assert fail2ban service is running and enabled
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[fail2ban_service_name ~ '.service'].state == 'running'
+      - ansible_facts.services[fail2ban_service_name ~ '.service'].status == 'enabled'
+    fail_msg: "fail2ban service is not running and enabled"
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Check fail2ban jail.local state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_jail_local_path }}"
+  register: fail2ban_verify_jail_local_stat
+  changed_when: false
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Assert fail2ban jail.local exists
+  ansible.builtin.assert:
+    that:
+      - fail2ban_verify_jail_local_stat.stat.exists
+    fail_msg: "Managed fail2ban file missing: {{ fail2ban_jail_local_path }}"
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Validate fail2ban jail.local content
+  become: true
+  ansible.builtin.command: grep -E '^\\[sshd\\]|^enabled = true|^port = {{ ssh_port }}' {{ fail2ban_jail_local_path }}
+  register: fail2ban_jail_config_check
+  changed_when: false
+  failed_when: fail2ban_jail_config_check.rc != 0
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Check fail2ban-client status
+  become: true
+  ansible.builtin.command: fail2ban-client status
+  register: fail2ban_status
+  changed_when: false
+  tags: [verify, system, fail2ban, phase1]
+
+- name: Assert sshd jail is active
+  ansible.builtin.assert:
+    that:
+      - "'Jail list:' in fail2ban_status.stdout"
+      - "'sshd' in fail2ban_status.stdout"
+    fail_msg: "fail2ban is not running or sshd jail is not active"
+  tags: [verify, system, fail2ban, phase1]

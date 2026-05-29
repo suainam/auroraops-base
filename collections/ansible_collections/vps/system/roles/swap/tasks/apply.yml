@@ -1,0 +1,99 @@
+- name: Ensure facts.d directory exists for swap baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, swap, phase0]
+
+- name: Persist pre-deploy swap baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ swap_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "swapfile_path": swapfile_path,
+          "pre_deploy_devices": current_swap_rows,
+          "pre_deploy_active_devices": current_swap_names,
+          "pre_deploy_fstab_line": managed_fstab_line
+        } | to_nice_json
+      }}
+  when: not swap_fact_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Disable managed swapfile before resize
+  become: true
+  ansible.builtin.command: swapoff "{{ swapfile_path }}"
+  when:
+    - needs_swapfile_action
+    - managed_swapfile_active
+  tags: [deploy, system, swap, phase0]
+
+- name: Remove immutable flag from managed swapfile before recreate
+  become: true
+  ansible.builtin.command: chattr -i "{{ swapfile_path }}"
+  ignore_errors: true
+  when:
+    - needs_swapfile_action
+    - swapfile_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Remove managed swapfile before recreate
+  become: true
+  ansible.builtin.file:
+    path: "{{ swapfile_path }}"
+    state: absent
+  when:
+    - needs_swapfile_action
+    - swapfile_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Create managed swapfile
+  become: true
+  ansible.builtin.command: "fallocate -l {{ desired_bytes }} {{ swapfile_path }}"
+  when: needs_swapfile_action
+  tags: [deploy, system, swap, phase0]
+
+- name: Set managed swapfile permissions
+  become: true
+  ansible.builtin.file:
+    path: "{{ swapfile_path }}"
+    mode: "0600"
+  when: needs_swapfile_action
+  tags: [deploy, system, swap, phase0]
+
+- name: Initialize managed swapfile
+  become: true
+  ansible.builtin.command: mkswap "{{ swapfile_path }}"
+  when: needs_swapfile_action
+  tags: [deploy, system, swap, phase0]
+
+- name: Ensure managed swapfile entry exists in fstab
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ swapfile_path | regex_escape }}\\s+"
+    line: "{{ swapfile_path }} none swap sw,pri={{ swapfile_priority }} 0 0"
+    state: present
+  tags: [deploy, system, swap, phase0]
+
+- name: Re-read active swap devices after deploy
+  ansible.builtin.command: cat /proc/swaps
+  register: post_deploy_swaps
+  changed_when: false
+  tags: [deploy, system, swap, phase0]
+
+- name: Parse post-deploy active swap devices
+  ansible.builtin.set_fact:
+    post_deploy_swap_names: "{{ (post_deploy_swaps.stdout_lines[1:] | default([])) | map('split') | map('first') | list }}"
+  tags: [deploy, system, swap, phase0]
+
+- name: Enable managed swapfile when needed
+  become: true
+  ansible.builtin.command: swapon "{{ swapfile_path }}"
+  when: swapfile_path not in post_deploy_swap_names
+  tags: [deploy, system, swap, phase0]

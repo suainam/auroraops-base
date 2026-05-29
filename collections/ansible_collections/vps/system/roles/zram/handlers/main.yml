@@ -1,0 +1,8 @@
+# roles/system-tuning/zram/handlers/main.yml
+---
+- name: Restart zramswap
+  become: yes
+  systemd:
+    name: zramswap
+    state: restarted
+  when: not ansible_check_mode  # 在 check 模式下跳过

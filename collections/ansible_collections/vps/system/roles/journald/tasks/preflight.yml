@@ -1,0 +1,82 @@
+- name: Check existing journald baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_fact_path }}"
+  register: journald_fact_stat
+  tags: [deploy, system, journald, phase0]
+
+- name: Read existing journald baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ journald_fact_path }}"
+  register: journald_fact_raw
+  when: journald_fact_stat.stat.exists
+  tags: [deploy, system, journald, phase0]
+
+- name: Parse existing journald baseline
+  ansible.builtin.set_fact:
+    journald_baseline: "{{ journald_fact_raw.content | b64decode | from_json }}"
+  when: journald_fact_stat.stat.exists
+  tags: [deploy, system, journald, phase0]
+
+- name: Validate journald baseline metadata
+  ansible.builtin.assert:
+    that:
+      - journald_baseline.auroraops_managed | default(false) | bool
+      - journald_baseline.version | default(0) | int >= 1
+      - journald_baseline.managed_dir == journald_managed_dir
+      - journald_baseline.managed_file == journald_managed_file
+      - journald_baseline.pre_deploy_dir_exists is defined
+      - journald_baseline.pre_deploy_file_exists is defined
+      - journald_baseline.pre_deploy_content is defined
+    fail_msg: "Existing journald baseline is invalid"
+  when: journald_fact_stat.stat.exists
+  tags: [deploy, system, journald, phase0]
+
+- name: Check current journald override directory state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_managed_dir }}"
+  register: journald_managed_dir_stat
+  tags: [deploy, system, journald, phase0]
+
+- name: Check current journald override file state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_managed_file }}"
+  register: journald_managed_file_stat
+  tags: [deploy, system, journald, phase0]
+
+- name: Read current journald override file
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ journald_managed_file }}"
+  register: journald_managed_file_raw
+  when: journald_managed_file_stat.stat.exists
+  tags: [deploy, system, journald, phase0]
+
+- name: Adopt legacy managed journald override as rollback baseline
+  ansible.builtin.debug:
+    msg: "Adopting existing {{ journald_managed_file }} as pre-deploy baseline because no journald baseline exists yet."
+  when:
+    - not journald_fact_stat.stat.exists
+    - journald_managed_file_stat.stat.exists
+  tags: [deploy, system, journald, phase0]
+
+- name: Build managed journald content
+  ansible.builtin.set_fact:
+    journald_desired_content: |
+      # Managed by AuroraOps: system.journald
+      [Journal]
+      SystemMaxUse={{ journald_system_max_use }}
+      RateLimitIntervalSec={{ journald_rate_limit_interval }}
+      RateLimitBurst={{ journald_rate_limit_burst }}
+      Storage={{ journald_storage }}
+      SyncIntervalSec={{ journald_sync_interval }}
+      ForwardToSyslog={{ journald_forward_to_syslog }}
+  tags: [deploy, system, journald, phase0]
+
+- name: Debug journald decision
+  ansible.builtin.debug:
+    msg: "ManagedDir={{ journald_managed_dir }} ManagedFile={{ journald_managed_file }} BaselineExists={{ journald_fact_stat.stat.exists }} CheckMode={{ ansible_check_mode }} SystemMaxUse={{ journald_system_max_use }}"
+  tags: [deploy, system, journald, phase0]

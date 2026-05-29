@@ -1,0 +1,26 @@
+  # 启用控制变量: auroraops_roles['personalization']['user_management'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+  # 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+  - name: 角色启用检查
+    ansible.builtin.debug:
+      msg: "Role user_management is disabled, skipping"
+    when: not (auroraops_roles['personalization']['user_management'] | default(true) | bool)
+    tags: [always, deploy, personalization, user_management]
+
+  - name: 角色已启用，执行用户管理任务
+    ansible.builtin.debug:
+      msg: "Executing user_management role tasks"
+    when: auroraops_roles['personalization']['user_management'] | default(true) | bool
+    tags: [always, deploy, personalization, user_management]
+
+  - name: Run user_management preflight
+    ansible.builtin.import_tasks: preflight.yml
+    when: auroraops_roles['personalization']['user_management'] | default(true) | bool
+    tags: [deploy, personalization, user_management, phase2]
+
+  - name: Apply managed user_management changes
+    ansible.builtin.import_tasks: apply.yml
+    when:
+      - auroraops_roles['personalization']['user_management'] | default(true) | bool
+      - not ansible_check_mode
+    tags: [deploy, personalization, user_management, phase2]

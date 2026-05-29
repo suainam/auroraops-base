@@ -1,0 +1,8 @@
+[Service]
+# Managed by AuroraOps: system.systemd_priority
+{% if item.oom_score_adj is defined %}
+OOMScoreAdjust={{ item.oom_score_adj }}
+{% endif %}
+{% if item.nice is defined and item.nice != None %}
+Nice={{ item.nice }}
+{% endif %}

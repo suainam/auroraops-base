@@ -1,0 +1,100 @@
+---
+- name: Check ssh baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ssh_fact_path }}"
+  register: ssh_fact_stat
+  tags: [verify, system, ssh, phase1]
+
+- name: Verify ssh baseline exists
+  ansible.builtin.assert:
+    that:
+      - ssh_fact_stat.stat.exists
+    fail_msg: "ssh baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, ssh, phase1]
+
+- name: Read ssh baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ssh_fact_path }}"
+  register: ssh_fact_raw
+  tags: [verify, system, ssh, phase1]
+
+- name: Parse ssh baseline
+  ansible.builtin.set_fact:
+    ssh_baseline: "{{ ssh_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, ssh, phase1]
+
+- name: Verify ssh baseline metadata
+  ansible.builtin.assert:
+    that:
+      - ssh_baseline.auroraops_managed | default(false) | bool
+      - ssh_baseline.version | default(0) | int >= 1
+      - ssh_baseline.main_config_path == ssh_main_config_path
+      - ssh_baseline.managed_dropin_path == ssh_managed_dropin_path
+      - ssh_baseline.pre_deploy_main_content is defined
+      - ssh_baseline.pre_deploy_dropin_content is defined
+      - ssh_baseline.pre_deploy_service_enabled is defined
+      - ssh_baseline.pre_deploy_service_running is defined
+    fail_msg: "ssh baseline content is invalid"
+  tags: [verify, system, ssh, phase1]
+
+- name: Gather ssh service facts for verify
+  become: true
+  ansible.builtin.service_facts:
+  tags: [verify, system, ssh, phase1]
+
+- name: Assert ssh service is running and enabled
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[ssh_service_name ~ '.service'].state == 'running'
+      - ansible_facts.services[ssh_service_name ~ '.service'].status == 'enabled'
+    fail_msg: "ssh service is not running and enabled"
+  tags: [verify, system, ssh, phase1]
+
+- name: Check managed ssh files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ ssh_main_config_path }}"
+    - "{{ ssh_managed_dropin_path }}"
+  register: ssh_verify_file_stats
+  changed_when: false
+  tags: [verify, system, ssh, phase1]
+
+- name: Assert managed ssh files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Managed ssh file missing: {{ item.item }}"
+  loop: "{{ ssh_verify_file_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [verify, system, ssh, phase1]
+
+- name: Verify sshd syntax
+  become: true
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  tags: [verify, system, ssh, phase1]
+
+- name: Read effective sshd config for verify
+  become: true
+  check_mode: false
+  ansible.builtin.command: sshd -T
+  register: ssh_verify_effective_config
+  changed_when: false
+  tags: [verify, system, ssh, phase1]
+
+- name: Assert effective sshd settings
+  ansible.builtin.assert:
+    that:
+      - "'port ' ~ (ssh_port | string) in ssh_verify_effective_config.stdout"
+      - "'permitrootlogin ' ~ ssh_permit_root_login in ssh_verify_effective_config.stdout"
+      - "'passwordauthentication ' ~ ssh_password_authentication in ssh_verify_effective_config.stdout"
+      - "'pubkeyauthentication ' ~ ssh_pubkey_authentication in ssh_verify_effective_config.stdout"
+      - "'clientaliveinterval ' ~ (ssh_client_alive_interval | string) in ssh_verify_effective_config.stdout"
+      - "'clientalivecountmax ' ~ (ssh_client_alive_count_max | string) in ssh_verify_effective_config.stdout"
+    fail_msg: "ssh effective config does not match expected values"
+  tags: [verify, system, ssh, phase1]

@@ -1,0 +1,99 @@
+- name: Gather memory facts
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  tags: [deploy, system, swap, phase0]
+
+- name: Compute desired swap bytes
+  ansible.builtin.import_tasks: compute_desired_swap.yml
+  tags: [deploy, system, swap, phase0]
+
+- name: Check existing swap baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ swap_fact_path }}"
+  register: swap_fact_stat
+  tags: [deploy, system, swap, phase0]
+
+- name: Read existing swap baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ swap_fact_path }}"
+  register: swap_fact_raw
+  when: swap_fact_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Parse existing swap baseline
+  ansible.builtin.set_fact:
+    swap_baseline: "{{ swap_fact_raw.content | b64decode | from_json }}"
+  when: swap_fact_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Read current active swap devices
+  ansible.builtin.command: cat /proc/swaps
+  register: current_swaps
+  changed_when: false
+  tags: [deploy, system, swap, phase0]
+
+- name: Parse current active swap devices
+  ansible.builtin.set_fact:
+    current_swap_rows: "{{ current_swaps.stdout_lines[1:] | default([]) }}"
+    current_swap_names: "{{ (current_swaps.stdout_lines[1:] | default([])) | map('split') | map('first') | list }}"
+  tags: [deploy, system, swap, phase0]
+
+- name: Read current fstab
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/fstab
+  register: fstab_raw
+  tags: [deploy, system, swap, phase0]
+
+- name: Parse current fstab entry for swapfile
+  ansible.builtin.set_fact:
+    managed_fstab_line: "{{ ((fstab_raw.content | b64decode | regex_findall('(?m)^' ~ (swapfile_path | regex_escape) ~ '\\s+.*$')) | first) | default('') }}"
+  tags: [deploy, system, swap, phase0]
+
+- name: Check current swapfile state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ swapfile_path }}"
+  register: swapfile_stat
+  tags: [deploy, system, swap, phase0]
+
+- name: Validate managed baseline metadata
+  ansible.builtin.assert:
+    that:
+      - swap_baseline.auroraops_managed | default(false) | bool
+      - swap_baseline.swapfile_path == swapfile_path
+      - swap_baseline.pre_deploy_active_devices is defined
+      - swap_baseline.pre_deploy_devices is defined
+      - swap_baseline.pre_deploy_fstab_line is defined
+    fail_msg: "Existing swap baseline is invalid or belongs to a different swapfile path"
+  when: swap_fact_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Refuse unmanaged pre-existing swapfile
+  ansible.builtin.fail:
+    msg: "Found unmanaged pre-existing {{ swapfile_path }}. Manual confirmation required before AuroraOps can manage it."
+  when:
+    - not swap_fact_stat.stat.exists
+    - swapfile_stat.stat.exists
+  tags: [deploy, system, swap, phase0]
+
+- name: Decide if swapfile needs creation or resize
+  ansible.builtin.set_fact:
+    needs_swapfile_action: >-
+      {{
+        (desired_bytes | int) > 0 and
+        (
+          (not swapfile_stat.stat.exists) or
+          (swapfile_stat.stat.size | default(0) | int) != (desired_bytes | int)
+        )
+      }}
+    managed_swapfile_active: "{{ swapfile_path in current_swap_names }}"
+  tags: [deploy, system, swap, phase0]
+
+- name: Debug swap decision
+  ansible.builtin.debug:
+    msg: "Desired={{ desired_bytes }} CurrentFileExists={{ swapfile_stat.stat.exists | default(false) }} CurrentFileSize={{ swapfile_stat.stat.size | default(0) }} NeedsAction={{ needs_swapfile_action }} ManagedActive={{ managed_swapfile_active }} CheckMode={{ ansible_check_mode }}"
+  tags: [deploy, system, swap, phase0]

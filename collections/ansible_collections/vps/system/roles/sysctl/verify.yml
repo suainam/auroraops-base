@@ -1,0 +1,28 @@
+- name: 验证 sysctl 参数
+  become: yes
+  ansible.builtin.command: sysctl -a
+  register: sysctl_out
+  changed_when: false
+  tags: [sysctl]
+
+- name: 检查 BBR
+  assert:
+    that: "'net.ipv4.tcp_congestion_control = bbr' in sysctl_out.stdout"
+    fail_msg: "❌ BBR 未启用"
+    success_msg: "✅ BBR 已启用"
+  tags: [sysctl]
+
+- name: 检查 TCP Fast Open
+  assert:
+    that: "'net.ipv4.tcp_fastopen = 3' in sysctl_out.stdout"
+    fail_msg: "❌ TCP Fast Open 未启用"
+    success_msg: "✅ TCP Fast Open 已启用"
+  tags: [sysctl]
+
+- name: 检查 conntrack
+  assert:
+    that: "'net.netfilter.nf_conntrack_max = 262144' in sysctl_out.stdout"
+    fail_msg: "❌ conntrack 未设置为 262144"
+    success_msg: "✅ conntrack 设置正确"
+  when: "'net.netfilter.nf_conntrack_max' in sysctl_out.stdout"
+  tags: [sysctl]

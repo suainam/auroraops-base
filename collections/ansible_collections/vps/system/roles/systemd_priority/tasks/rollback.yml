@@ -1,0 +1,129 @@
+---
+- name: Check systemd_priority baseline for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ systemd_priority_fact_path }}"
+  register: systemd_priority_fact_stat
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Check managed systemd priority override files for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item.name }}.service.d/priority.conf"
+  register: systemd_priority_rollback_file_stats
+  loop: "{{ systemd_priority_services }}"
+  changed_when: false
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Check managed systemd priority override directories for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item.name }}.service.d"
+  register: systemd_priority_rollback_dir_stats
+  loop: "{{ systemd_priority_services }}"
+  changed_when: false
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Refuse rollback without baseline when managed systemd priority artifacts remain
+  ansible.builtin.fail:
+    msg: "systemd_priority baseline is missing while managed artifacts still exist"
+  when:
+    - not systemd_priority_fact_stat.stat.exists
+    - (systemd_priority_rollback_file_stats.results | selectattr('stat.exists') | list | length > 0 or systemd_priority_rollback_dir_stats.results | selectattr('stat.exists') | list | length > 0)
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: No managed systemd priority state to rollback
+  ansible.builtin.debug:
+    msg: "No systemd_priority baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not systemd_priority_fact_stat.stat.exists
+    - (systemd_priority_rollback_file_stats.results | selectattr('stat.exists') | list | length == 0)
+    - (systemd_priority_rollback_dir_stats.results | selectattr('stat.exists') | list | length == 0)
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Read systemd_priority baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ systemd_priority_fact_path }}"
+  register: systemd_priority_fact_raw
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Parse systemd_priority baseline for rollback
+  ansible.builtin.set_fact:
+    systemd_priority_baseline: "{{ systemd_priority_fact_raw.content | b64decode | from_json }}"
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Validate systemd_priority baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - systemd_priority_baseline.auroraops_managed | default(false) | bool
+      - systemd_priority_baseline.version | default(0) | int >= 1
+      - systemd_priority_baseline.managed_services is mapping
+      - systemd_priority_baseline.managed_services | length > 0
+    fail_msg: "systemd_priority baseline content is invalid for rollback"
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Restore previous systemd priority override directory when it existed before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.value.managed_dir }}"
+    state: directory
+    mode: "{{ item.value.pre_deploy_dir_mode | default('0755') }}"
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  when:
+    - systemd_priority_fact_stat.stat.exists
+    - item.value.pre_deploy_dir_exists | bool
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Restore previous systemd priority override file content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ item.value.managed_file }}"
+    content: "{{ item.value.pre_deploy_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  when:
+    - systemd_priority_fact_stat.stat.exists
+    - item.value.pre_deploy_file_exists | bool
+  notify:
+    - "[Systemd Priority] Reload systemd"
+    - "[Systemd Priority] Restart priority services"
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Remove managed systemd priority override file when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.value.managed_file }}"
+    state: absent
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  when:
+    - systemd_priority_fact_stat.stat.exists
+    - not (item.value.pre_deploy_file_exists | bool)
+  notify:
+    - "[Systemd Priority] Reload systemd"
+    - "[Systemd Priority] Restart priority services"
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Remove managed systemd priority override directory when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.value.managed_dir }}"
+    state: absent
+  loop: "{{ systemd_priority_baseline.managed_services | dict2items }}"
+  when:
+    - systemd_priority_fact_stat.stat.exists
+    - not (item.value.pre_deploy_dir_exists | bool)
+  tags: [rollback, system, systemd_priority, phase0]
+
+- name: Remove systemd_priority baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ systemd_priority_fact_path }}"
+    state: absent
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [rollback, system, systemd_priority, phase0]

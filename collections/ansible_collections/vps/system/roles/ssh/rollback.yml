@@ -1,0 +1,4 @@
+---
+- name: Roll back managed ssh state
+  ansible.builtin.import_tasks: tasks/rollback.yml
+  tags: [rollback, system, ssh, phase1]

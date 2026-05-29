@@ -1,0 +1,22 @@
+# Benchmark 角色默认变量
+# 注意: 不在此处定义 auroraops_roles，避免覆盖 host_vars 合并逻辑
+# 角色启用控制通过 group_vars/all/roles.yml 中的 auroraops_roles.system.benchmark 管理
+
+# 结果保存路径
+benchmark_fact_path: "/etc/ansible/facts.d/performance.fact"
+benchmark_script_path: "/usr/local/bin/auroraops_benchmark.sh"
+benchmark_hostvars_marker: "# {mark} ANSIBLE MANAGED BLOCK: BENCHMARK PERFORMANCE"
+benchmark_baseline_path: "/etc/ansible/facts.d/benchmark.fact"
+benchmark_report_path: "/var/log/auroraops/benchmark_report.txt"
+benchmark_inventory_base_dir: "{{ (inventory_file | dirname) if (inventory_file is defined and (inventory_file | string | length > 0)) else inventory_dir }}"
+benchmark_host_vars_dir_path: "{{ benchmark_inventory_base_dir }}/host_vars"
+benchmark_host_vars_path: "{{ benchmark_host_vars_dir_path }}/{{ inventory_hostname }}.yml"
+
+# 同步控制
+benchmark_sync_to_local: true
+benchmark_async_timeout: 1800
+benchmark_async_poll: 15
+
+# fast: local-only metrics, no external benchmark binary downloads.
+# fusion: legacy ecs.sh path, slower and network-dependent.
+benchmark_mode: fast

@@ -1,0 +1,159 @@
+- name: Check swap baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ swap_fact_path }}"
+  register: swap_fact_stat
+  tags: [rollback, system, swap, phase0]
+
+- name: Check managed swapfile presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ swapfile_path }}"
+  register: swapfile_stat
+  tags: [rollback, system, swap, phase0]
+
+- name: Read fstab before rollback
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/fstab
+  register: fstab_raw
+  tags: [rollback, system, swap, phase0]
+
+- name: Parse current rollback markers
+  ansible.builtin.set_fact:
+    managed_fstab_present: "{{ ((fstab_raw.content | b64decode | regex_findall('(?m)^' ~ (swapfile_path | regex_escape) ~ '\\s+.*$')) | length) > 0 }}"
+  tags: [rollback, system, swap, phase0]
+
+- name: Refuse rollback without baseline when managed artifacts remain
+  ansible.builtin.fail:
+    msg: "Swap baseline is missing while managed swap artifacts still exist"
+  when:
+    - not swap_fact_stat.stat.exists
+    - swapfile_stat.stat.exists or managed_fstab_present
+  tags: [rollback, system, swap, phase0]
+
+- name: No managed swap state to rollback
+  ansible.builtin.debug:
+    msg: "No swap baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not swap_fact_stat.stat.exists
+    - not swapfile_stat.stat.exists
+    - not managed_fstab_present
+  tags: [rollback, system, swap, phase0]
+
+- name: Read swap baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ swap_fact_path }}"
+  register: swap_fact_raw
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Parse swap baseline for rollback
+  ansible.builtin.set_fact:
+    swap_baseline: "{{ swap_fact_raw.content | b64decode | from_json }}"
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Validate swap baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - swap_baseline.auroraops_managed | default(false) | bool
+      - swap_baseline.swapfile_path == swapfile_path
+      - swap_baseline.pre_deploy_active_devices is defined
+      - swap_baseline.pre_deploy_fstab_line is defined
+    fail_msg: "Swap baseline content is invalid for rollback"
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Read active swap devices before rollback
+  ansible.builtin.command: cat /proc/swaps
+  register: current_swaps
+  changed_when: false
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Parse active swap device names before rollback
+  ansible.builtin.set_fact:
+    current_swap_names: "{{ (current_swaps.stdout_lines[1:] | default([])) | map('split') | map('first') | list }}"
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Disable managed swapfile
+  become: true
+  ansible.builtin.command: swapoff "{{ swapfile_path }}"
+  when:
+    - swap_fact_stat.stat.exists
+    - swapfile_path in current_swap_names
+  tags: [rollback, system, swap, phase0, swap_disable_swap]
+
+- name: Remove immutable flag from managed swapfile
+  become: true
+  ansible.builtin.command: chattr -i "{{ swapfile_path }}"
+  ignore_errors: true
+  when:
+    - swap_fact_stat.stat.exists
+    - swapfile_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Remove managed swapfile
+  become: true
+  ansible.builtin.file:
+    path: "{{ swapfile_path }}"
+    state: absent
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0, swap_remove_file]
+
+- name: Restore pre-deploy swapfile fstab entry
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ swapfile_path | regex_escape }}\\s+"
+    line: "{{ swap_baseline.pre_deploy_fstab_line }}"
+    state: present
+  when:
+    - swap_fact_stat.stat.exists
+    - (swap_baseline.pre_deploy_fstab_line | length) > 0
+  tags: [rollback, system, swap, phase0, swap_restore_fstab]
+
+- name: Remove managed swapfile fstab entry
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ swapfile_path | regex_escape }}\\s+"
+    state: absent
+  when:
+    - swap_fact_stat.stat.exists
+    - (swap_baseline.pre_deploy_fstab_line | length) == 0
+  tags: [rollback, system, swap, phase0, swap_remove_fstab]
+
+- name: Re-read active swap devices after managed cleanup
+  ansible.builtin.command: cat /proc/swaps
+  register: post_cleanup_swaps
+  changed_when: false
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Parse active swap device names after managed cleanup
+  ansible.builtin.set_fact:
+    post_cleanup_swap_names: "{{ (post_cleanup_swaps.stdout_lines[1:] | default([])) | map('split') | map('first') | list }}"
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0]
+
+- name: Restore pre-deploy active swap devices
+  become: true
+  ansible.builtin.command: "swapon {{ item }}"
+  loop: "{{ swap_baseline.pre_deploy_active_devices }}"
+  when:
+    - swap_fact_stat.stat.exists
+    - item != swapfile_path
+    - item not in post_cleanup_swap_names
+  tags: [rollback, system, swap, phase0, swap_restore_previous]
+
+- name: Remove swap baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ swap_fact_path }}"
+    state: absent
+  when: swap_fact_stat.stat.exists
+  tags: [rollback, system, swap, phase0, swap_remove_baseline]

@@ -1,0 +1,33 @@
+---
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role reinstall is disabled, skipping"
+  when: not (auroraops_roles['system']['reinstall'] | default(false) | bool)
+  tags: [always, deploy, system, reinstall]
+
+- name: 执行重装前确认
+  ansible.builtin.pause:
+    prompt: "{{ reinstall_warning_msg }}\n\n⚠️  PROCEED WITH REINSTALL? (y/N): "
+  register: confirm_reinstall
+  when: auroraops_roles['system']['reinstall'] | default(false) | bool
+  tags: [deploy, system, reinstall]
+
+- name: 终止任务（未确认）
+  ansible.builtin.meta: end_host
+  when: 
+    - auroraops_roles['system']['reinstall'] | default(false) | bool
+    - confirm_reinstall.user_input | default('') | lower != 'y'
+  tags: [deploy, system, reinstall]
+
+- name: 下载并执行重装脚本 (交互式引导)
+  ansible.builtin.shell: |
+    curl -sS -O {{ reinstall_script_url }}
+    chmod +x kejilion.sh
+    echo "Please follow the interactive instructions in your terminal to complete DD."
+    ./kejilion.sh
+  args:
+    executable: /bin/bash
+  when: 
+    - auroraops_roles['system']['reinstall'] | default(false) | bool
+    - confirm_reinstall.user_input | default('') | lower == 'y'
+  tags: [deploy, system, reinstall]

@@ -1,0 +1,4 @@
+---
+- name: Verify managed fail2ban state
+  ansible.builtin.import_tasks: tasks/verify.yml
+  tags: [verify, system, fail2ban, phase1]

@@ -1,0 +1,36 @@
+- name: Ensure facts.d directory exists for limits baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, limits, phase0]
+
+- name: Persist pre-deploy limits baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ limits_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "managed_file": limits_managed_file,
+          "pre_deploy_file_exists": limits_managed_file_stat.stat.exists | default(false),
+          "pre_deploy_content": (limits_managed_file_raw.content | b64decode) if (limits_managed_file_stat.stat.exists | default(false)) else '',
+          "managed_nofile": limits_nofile
+        } | to_nice_json
+      }}
+  when: not limits_fact_stat.stat.exists
+  tags: [deploy, system, limits, phase0]
+
+- name: Write managed limits file
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ limits_managed_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ limits_desired_content }}"
+  tags: [deploy, system, limits, phase0]

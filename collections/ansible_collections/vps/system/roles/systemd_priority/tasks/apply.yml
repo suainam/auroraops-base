@@ -1,0 +1,49 @@
+---
+- name: Ensure facts.d directory exists for systemd_priority baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Persist pre-deploy systemd_priority baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ systemd_priority_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "managed_services": systemd_priority_managed_services
+        } | to_nice_json
+      }}
+  when: not systemd_priority_fact_stat.stat.exists
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Ensure systemd priority override directory exists
+  become: true
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item.name }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ systemd_priority_services }}"
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Apply priority override
+  become: true
+  ansible.builtin.template:
+    src: priority_override.conf.j2
+    dest: "/etc/systemd/system/{{ item.name }}.service.d/priority.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ systemd_priority_services }}"
+  notify:
+    - "[Systemd Priority] Reload systemd"
+    - "[Systemd Priority] Restart priority services"
+  tags: [deploy, system, systemd_priority, phase0]

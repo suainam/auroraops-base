@@ -1,0 +1,5 @@
+---
+- name: Force logrotate
+  become: yes
+  command: logrotate -f /etc/logrotate.conf
+

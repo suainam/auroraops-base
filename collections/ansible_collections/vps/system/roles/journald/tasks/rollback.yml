@@ -1,0 +1,119 @@
+- name: Check journald baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_fact_path }}"
+  register: journald_fact_stat
+  tags: [rollback, system, journald, phase0]
+
+- name: Check managed journald override file presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_managed_file }}"
+  register: journald_managed_file_stat
+  tags: [rollback, system, journald, phase0]
+
+- name: Check managed journald override directory presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_managed_dir }}"
+  register: journald_managed_dir_stat
+  tags: [rollback, system, journald, phase0]
+
+- name: Refuse rollback without baseline when managed journald artifacts remain
+  ansible.builtin.fail:
+    msg: "Journald baseline is missing while managed journald artifacts still exist"
+  when:
+    - not journald_fact_stat.stat.exists
+    - journald_managed_file_stat.stat.exists | default(false) or journald_managed_dir_stat.stat.exists | default(false)
+  tags: [rollback, system, journald, phase0]
+
+- name: No managed journald state to rollback
+  ansible.builtin.debug:
+    msg: "No journald baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not journald_fact_stat.stat.exists
+    - not (journald_managed_file_stat.stat.exists | default(false))
+    - not (journald_managed_dir_stat.stat.exists | default(false))
+  tags: [rollback, system, journald, phase0]
+
+- name: Read journald baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ journald_fact_path }}"
+  register: journald_fact_raw
+  when: journald_fact_stat.stat.exists
+  tags: [rollback, system, journald, phase0]
+
+- name: Parse journald baseline for rollback
+  ansible.builtin.set_fact:
+    journald_baseline: "{{ journald_fact_raw.content | b64decode | from_json }}"
+  when: journald_fact_stat.stat.exists
+  tags: [rollback, system, journald, phase0]
+
+- name: Validate journald baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - journald_baseline.auroraops_managed | default(false) | bool
+      - journald_baseline.version | default(0) | int >= 1
+      - journald_baseline.managed_dir == journald_managed_dir
+      - journald_baseline.managed_file == journald_managed_file
+      - journald_baseline.pre_deploy_dir_exists is defined
+      - journald_baseline.pre_deploy_file_exists is defined
+      - journald_baseline.pre_deploy_content is defined
+    fail_msg: "Journald baseline content is invalid for rollback"
+  when: journald_fact_stat.stat.exists
+  tags: [rollback, system, journald, phase0]
+
+- name: Restore previous journald override directory when it existed before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ journald_managed_dir }}"
+    state: directory
+    mode: "{{ journald_baseline.pre_deploy_dir_mode | default('0755') }}"
+  when:
+    - journald_fact_stat.stat.exists
+    - journald_baseline.pre_deploy_dir_exists | bool
+  tags: [rollback, system, journald, phase0, journald_restore_dir]
+
+- name: Restore previous journald override file content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ journald_managed_file }}"
+    content: "{{ journald_baseline.pre_deploy_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - journald_fact_stat.stat.exists
+    - journald_baseline.pre_deploy_file_exists | bool
+  notify: Restart journald
+  tags: [rollback, system, journald, phase0, journald_restore_file]
+
+- name: Remove managed journald override file when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ journald_managed_file }}"
+    state: absent
+  when:
+    - journald_fact_stat.stat.exists
+    - not (journald_baseline.pre_deploy_file_exists | bool)
+  notify: Restart journald
+  tags: [rollback, system, journald, phase0, journald_remove_file]
+
+- name: Remove managed journald override directory when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ journald_managed_dir }}"
+    state: absent
+  when:
+    - journald_fact_stat.stat.exists
+    - not (journald_baseline.pre_deploy_dir_exists | bool)
+  tags: [rollback, system, journald, phase0, journald_remove_dir]
+
+- name: Remove journald baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ journald_fact_path }}"
+    state: absent
+  when: journald_fact_stat.stat.exists
+  tags: [rollback, system, journald, phase0, journald_remove_baseline]

@@ -1,0 +1,148 @@
+- name: Bootstrap init verify with system Python interpreter
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /usr/bin/python3
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Check init baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ init_fact_path }}"
+  register: init_fact_stat
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Verify init baseline exists
+  ansible.builtin.assert:
+    that:
+    - init_fact_stat.stat.exists
+    fail_msg: init baseline is missing; rollback preconditions are not satisfied
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Read init baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ init_fact_path }}"
+  register: init_fact_raw
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Parse init baseline
+  ansible.builtin.set_fact:
+    init_baseline: "{{ init_fact_raw.content | b64decode | from_json }}"
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Verify init baseline metadata
+  ansible.builtin.assert:
+    that:
+    - init_baseline.auroraops_managed | default(false) | bool
+    - init_baseline.version | default(0) | int >= 1
+    - init_baseline.preinstalled_packages is defined
+    - init_baseline.pre_deploy_sources_exists is defined
+    - init_baseline.pre_deploy_resolv_exists is defined
+    - init_baseline.pre_deploy_resolv_content is defined
+    - init_baseline.pre_deploy_has_nameserver is defined
+    fail_msg: init baseline content is invalid
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Verify resolv.conf contains nameserver entries
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/resolv.conf
+  register: init_verify_resolv_raw
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Assert resolv.conf is bootstrap-usable
+  ansible.builtin.assert:
+    that:
+    - ((init_verify_resolv_raw.content | b64decode | regex_findall('(?m)^nameserver\\s+')) | length) > 0
+    fail_msg: resolv.conf still has no nameserver entries; apt bootstrap cannot work
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Verify Debian sources.list no longer contains cdrom entries
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/apt/sources.list
+  register: init_sources_raw
+  when: ansible_distribution == 'Debian'
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: Assert Debian sources.list uses expected release and no cdrom entries
+  ansible.builtin.assert:
+    that:
+    - "'deb cdrom:' not in (init_sources_raw.content | b64decode)"
+    - ansible_distribution_release in (init_sources_raw.content | b64decode)
+    fail_msg: Debian sources.list is not in expected managed state
+  when: ansible_distribution == 'Debian'
+  tags:
+  - verify
+  - system
+  - init
+  - phase0
+
+- name: 检查基础工具是否已安装
+  become: true
+  ansible.builtin.command: dpkg -s {{ item }}
+  loop: "{{ init_packages | difference(['dnsutils']) }}"
+  register: installed_tools_check
+  failed_when: installed_tools_check.rc != 0
+  changed_when: false
+  tags:
+  - verify
+  - system
+  - init
+  - init_verify_install_tools
+  - phase0
+
+- name: 验证 dnsutils 提供的 nslookup 可用
+  become: true
+  ansible.builtin.command: nslookup localhost
+  changed_when: false
+  tags:
+  - verify
+  - system
+  - init
+  - init_verify_install_tools
+  - phase0
+
+- name: 验证 Ansible 是否可用
+  ansible.builtin.ping: null
+  tags:
+  - verify
+  - system
+  - init
+  - init_verify_test_ansible
+  - phase0

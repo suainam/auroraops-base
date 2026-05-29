@@ -1,0 +1,5 @@
+---
+- name: Reload fstab
+  become: yes
+  command: mount -a
+

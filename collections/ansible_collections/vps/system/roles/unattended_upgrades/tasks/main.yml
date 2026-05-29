@@ -1,0 +1,24 @@
+---
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role unattended_upgrades is disabled, skipping"
+  when: not (auroraops_roles['system']['unattended_upgrades'] | default(true) | bool)
+  tags: [always, deploy, system, unattended_upgrades]
+
+- name: 角色已启用，执行 unattended_upgrades 任务
+  ansible.builtin.debug:
+    msg: "Executing unattended_upgrades role tasks"
+  when: auroraops_roles['system']['unattended_upgrades'] | default(true) | bool
+  tags: [always, deploy, system, unattended_upgrades]
+
+- name: Run unattended_upgrades preflight
+  ansible.builtin.import_tasks: preflight.yml
+  when: auroraops_roles['system']['unattended_upgrades'] | default(true) | bool
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Apply managed unattended_upgrades changes
+  ansible.builtin.import_tasks: apply.yml
+  when:
+    - auroraops_roles['system']['unattended_upgrades'] | default(true) | bool
+    - not ansible_check_mode
+  tags: [deploy, system, unattended_upgrades, phase1]

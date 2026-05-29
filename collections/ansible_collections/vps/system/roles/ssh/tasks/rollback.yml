@@ -1,0 +1,131 @@
+---
+- name: Check ssh baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ssh_fact_path }}"
+  register: ssh_fact_stat
+  tags: [rollback, system, ssh, phase1]
+
+- name: Check ssh managed drop-in presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ssh_managed_dropin_path }}"
+  register: ssh_managed_dropin_stat
+  tags: [rollback, system, ssh, phase1]
+
+- name: Refuse rollback without baseline when managed ssh artifacts remain
+  ansible.builtin.fail:
+    msg: "ssh baseline is missing while managed ssh artifacts still exist"
+  when:
+    - not ssh_fact_stat.stat.exists
+    - ssh_managed_dropin_stat.stat.exists | default(false)
+  tags: [rollback, system, ssh, phase1]
+
+- name: No managed ssh state to rollback
+  ansible.builtin.debug:
+    msg: "No ssh baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not ssh_fact_stat.stat.exists
+    - not (ssh_managed_dropin_stat.stat.exists | default(false))
+  tags: [rollback, system, ssh, phase1]
+
+- name: Read ssh baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ssh_fact_path }}"
+  register: ssh_fact_raw
+  when: ssh_fact_stat.stat.exists
+  tags: [rollback, system, ssh, phase1]
+
+- name: Parse ssh baseline for rollback
+  ansible.builtin.set_fact:
+    ssh_baseline: "{{ ssh_fact_raw.content | b64decode | from_json }}"
+  when: ssh_fact_stat.stat.exists
+  tags: [rollback, system, ssh, phase1]
+
+- name: Validate ssh baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - ssh_baseline.auroraops_managed | default(false) | bool
+      - ssh_baseline.version | default(0) | int >= 1
+      - ssh_baseline.main_config_path == ssh_main_config_path
+      - ssh_baseline.managed_dropin_path == ssh_managed_dropin_path
+      - ssh_baseline.pre_deploy_main_content is defined
+      - ssh_baseline.pre_deploy_dropin_content is defined
+      - ssh_baseline.pre_deploy_service_enabled is defined
+      - ssh_baseline.pre_deploy_service_running is defined
+    fail_msg: "ssh baseline content is invalid for rollback"
+  when: ssh_fact_stat.stat.exists
+  tags: [rollback, system, ssh, phase1]
+
+- name: Restore pre-deploy ssh main config
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ ssh_main_config_path }}"
+    content: "{{ ssh_baseline.pre_deploy_main_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - ssh_fact_stat.stat.exists
+    - ssh_baseline.pre_deploy_main_exists | bool
+  notify: Restart sshd
+  tags: [rollback, system, ssh, phase1]
+
+- name: Remove ssh main config when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ ssh_main_config_path }}"
+    state: absent
+  when:
+    - ssh_fact_stat.stat.exists
+    - not (ssh_baseline.pre_deploy_main_exists | bool)
+  notify: Restart sshd
+  tags: [rollback, system, ssh, phase1]
+
+- name: Restore pre-deploy ssh managed drop-in
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ ssh_managed_dropin_path }}"
+    content: "{{ ssh_baseline.pre_deploy_dropin_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - ssh_fact_stat.stat.exists
+    - ssh_baseline.pre_deploy_dropin_exists | bool
+  notify: Restart sshd
+  tags: [rollback, system, ssh, phase1]
+
+- name: Remove ssh managed drop-in when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ ssh_managed_dropin_path }}"
+    state: absent
+  when:
+    - ssh_fact_stat.stat.exists
+    - not (ssh_baseline.pre_deploy_dropin_exists | bool)
+  notify: Restart sshd
+  tags: [rollback, system, ssh, phase1]
+
+- name: Restore ssh service enabled state
+  become: true
+  ansible.builtin.service:
+    name: "{{ ssh_service_name }}"
+    enabled: "{{ ssh_baseline.pre_deploy_service_enabled | bool }}"
+    state: "{{ 'started' if ssh_baseline.pre_deploy_service_running | bool else 'stopped' }}"
+  when: ssh_fact_stat.stat.exists
+  tags: [rollback, system, ssh, phase1]
+
+- name: Flush ssh handlers after rollback
+  ansible.builtin.meta: flush_handlers
+  when: ssh_fact_stat.stat.exists
+  tags: [rollback, system, ssh, phase1]
+
+- name: Remove ssh baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ ssh_fact_path }}"
+    state: absent
+  when: ssh_fact_stat.stat.exists
+  tags: [rollback, system, ssh, phase1]

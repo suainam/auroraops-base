@@ -1,0 +1,88 @@
+- name: Gather memory facts for zram verify
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  tags: [verify, system, zram, phase0]
+
+- name: Determine dynamic zram state for verify
+  ansible.builtin.set_fact:
+    _actual_ram_mb: "{{ performance.hardware.ram_mb | default(ansible_local.performance.hardware.ram_mb | default(ansible_facts['memtotal_mb'])) | int }}"
+    _zram_auto_disabled: "{{ (performance.hardware.ram_mb | default(ansible_local.performance.hardware.ram_mb | default(ansible_facts['memtotal_mb'])) | int) > (zram_auto_disable_ram_mb_threshold | int) }}"
+  tags: [verify, system, zram, phase0]
+
+- name: Check zram baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zram_fact_path }}"
+  register: zram_fact_stat
+  tags: [verify, system, zram, phase0]
+
+- name: Assert zram rollback baseline exists
+  ansible.builtin.assert:
+    that:
+      - zram_fact_stat.stat.exists
+    fail_msg: "zram rollback baseline missing at {{ zram_fact_path }}"
+  tags: [verify, system, zram, phase0]
+
+- name: Skip strict zram assertions when auto-disabled
+  ansible.builtin.debug:
+    msg: "zram verify is informational only because RAM {{ _actual_ram_mb }} exceeds threshold {{ zram_auto_disable_ram_mb_threshold }}"
+  when: _zram_auto_disabled
+  tags: [verify, system, zram, phase0]
+
+- name: Verify zram-tools package is installed
+  ansible.builtin.command: dpkg -s zram-tools
+  register: zram_package_check
+  failed_when: zram_package_check.rc != 0
+  changed_when: false
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_package, phase0]
+
+- name: Gather service facts for zram verify
+  ansible.builtin.service_facts:
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_service, phase0]
+
+- name: Check zramswap service is enabled
+  ansible.builtin.assert:
+    that:
+      - "'zramswap.service' in ansible_facts.services"
+      - ansible_facts.services['zramswap.service'].status == 'enabled'
+    fail_msg: "zramswap 服务未启用"
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_service, phase0]
+
+- name: Verify zramswap config content
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/default/zramswap
+  register: zram_config_raw
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_config, phase0]
+
+- name: Assert zramswap config matches desired state
+  ansible.builtin.assert:
+    that:
+      - (zram_config_raw.content | b64decode) == ('ALGO=' ~ zram_algo ~ '\nPERCENT=' ~ (zram_percent | string) ~ '\nPRIORITY=' ~ (zram_priority | string) ~ '\n')
+    fail_msg: "zramswap 配置与期望值不一致"
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_config, phase0]
+
+- name: Verify active zram device exists
+  become: true
+  ansible.builtin.shell: /usr/sbin/swapon --show --noheadings --output NAME,PRIO | grep '^/dev/zram'
+  args:
+    executable: /bin/bash
+  register: active_zram_devices
+  changed_when: false
+  failed_when: active_zram_devices.rc != 0
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_zram_active, phase0]
+
+- name: Assert active zram priority matches desired value
+  ansible.builtin.assert:
+    that:
+      - active_zram_devices.stdout is search('(?m)^/dev/zram.*\\s' ~ (zram_priority | string) ~ '\\s')
+    fail_msg: "zram 活跃设备优先级不正确"
+  when: not _zram_auto_disabled
+  tags: [verify, system, zram, zram_verify_zram_active, phase0]

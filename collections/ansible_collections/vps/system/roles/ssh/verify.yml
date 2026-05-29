@@ -1,0 +1,4 @@
+---
+- name: Verify managed ssh state
+  ansible.builtin.import_tasks: tasks/verify.yml
+  tags: [verify, system, ssh, phase1]

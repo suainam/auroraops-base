@@ -1,0 +1,169 @@
+---
+- name: Check benchmark baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_baseline_path }}"
+  register: benchmark_baseline_stat
+
+- name: Check benchmark managed script presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_script_path }}"
+  register: benchmark_script_stat
+
+- name: Check benchmark managed fact presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_fact_path }}"
+  register: benchmark_fact_stat
+
+- name: No managed benchmark state to rollback
+  ansible.builtin.debug:
+    msg: "No benchmark baseline found, skipping rollback"
+  when:
+    - not benchmark_baseline_stat.stat.exists
+    - not benchmark_script_stat.stat.exists
+    - not benchmark_fact_stat.stat.exists
+
+- name: Refuse benchmark rollback without baseline when managed artifacts remain
+  ansible.builtin.fail:
+    msg: "Benchmark baseline is missing while managed artifacts still exist"
+  when:
+    - not benchmark_baseline_stat.stat.exists
+    - benchmark_script_stat.stat.exists or benchmark_fact_stat.stat.exists
+
+- name: Read benchmark baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ benchmark_baseline_path }}"
+  register: benchmark_baseline_raw
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Parse benchmark baseline for rollback
+  ansible.builtin.set_fact:
+    benchmark_baseline: "{{ benchmark_baseline_raw.content | b64decode | from_json }}"
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Validate benchmark baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - benchmark_baseline.auroraops_managed | default(false) | bool
+      - benchmark_baseline.version | default(0) | int >= 1
+      - benchmark_baseline.script_path == benchmark_script_path
+      - benchmark_baseline.fact_path == benchmark_fact_path
+      - benchmark_baseline.pre_deploy_script_exists is defined
+      - benchmark_baseline.pre_deploy_script_content is defined
+      - benchmark_baseline.pre_deploy_fact_exists is defined
+      - benchmark_baseline.pre_deploy_fact_content is defined
+      - benchmark_baseline.pre_deploy_report_exists is defined
+      - benchmark_baseline.pre_deploy_report_content is defined
+      - benchmark_baseline.pre_deploy_host_vars_existed is defined
+    fail_msg: "Benchmark baseline content is invalid for rollback"
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Remove benchmark managed host_vars block
+  delegate_to: localhost
+  become: false
+  ansible.builtin.blockinfile:
+    path: "{{ benchmark_host_vars_path }}"
+    marker: "{{ benchmark_hostvars_marker }}"
+    state: absent
+  vars:
+    ansible_become: false
+  when: benchmark_baseline_stat.stat.exists
+
+- name: Check benchmark host_vars file after rollback
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ benchmark_host_vars_path }}"
+  register: benchmark_host_vars_after_rollback
+  vars:
+    ansible_become: false
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - not (benchmark_baseline.pre_deploy_host_vars_existed | bool)
+
+- name: Remove empty benchmark host_vars file created by deploy
+  delegate_to: localhost
+  become: false
+  ansible.builtin.file:
+    path: "{{ benchmark_host_vars_path }}"
+    state: absent
+  vars:
+    ansible_become: false
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - not (benchmark_baseline.pre_deploy_host_vars_existed | bool)
+    - benchmark_host_vars_after_rollback.stat.exists | default(false)
+    - benchmark_host_vars_after_rollback.stat.size | default(0) == 0
+
+- name: Restore benchmark fact baseline when it existed before deploy
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ benchmark_fact_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ benchmark_baseline.pre_deploy_fact_content }}"
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - benchmark_baseline.pre_deploy_fact_exists | bool
+
+- name: Remove benchmark fact created by deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ benchmark_fact_path }}"
+    state: absent
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - not (benchmark_baseline.pre_deploy_fact_exists | bool)
+
+- name: Restore benchmark report baseline when it existed before deploy
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ benchmark_report_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ benchmark_baseline.pre_deploy_report_content }}"
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - benchmark_baseline.pre_deploy_report_exists | bool
+
+- name: Remove benchmark report created by deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ benchmark_report_path }}"
+    state: absent
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - not (benchmark_baseline.pre_deploy_report_exists | bool)
+
+- name: Restore benchmark script baseline when it existed before deploy
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ benchmark_script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+    content: "{{ benchmark_baseline.pre_deploy_script_content }}"
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - benchmark_baseline.pre_deploy_script_exists | bool
+
+- name: Remove benchmark script created by deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ benchmark_script_path }}"
+    state: absent
+  when:
+    - benchmark_baseline_stat.stat.exists
+    - not (benchmark_baseline.pre_deploy_script_exists | bool)
+
+- name: Remove benchmark baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ benchmark_baseline_path }}"
+    state: absent
+  when: benchmark_baseline_stat.stat.exists

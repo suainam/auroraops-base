@@ -1,0 +1,78 @@
+---
+- name: Check if moon configuration exists
+  become: yes
+  ansible.builtin.stat:
+    path: /var/lib/zerotier-one/moon.json
+  register: moon_json_file
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Initialize Moon configuration
+  become: yes
+  ansible.builtin.shell: zerotier-idtool initmoon identity.public > moon.json
+  args:
+    chdir: /var/lib/zerotier-one
+    creates: /var/lib/zerotier-one/moon.json
+  when: not moon_json_file.stat.exists
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Read Moon configuration
+  become: yes
+  ansible.builtin.slurp:
+    src: /var/lib/zerotier-one/moon.json
+  register: moon_config_b64
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Parse Moon configuration
+  ansible.builtin.set_fact:
+    moon_config: "{{ moon_config_b64['content'] | b64decode | from_json }}"
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Determine Public IP for Moon
+  ansible.builtin.set_fact:
+    moon_public_ip: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
+  when: moon_public_ip is not defined
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Update Moon configuration with stable endpoints
+  become: yes
+  ansible.builtin.copy:
+    content: "{{ moon_config | combine({'roots': [moon_config['roots'][0] | combine({'stableEndpoints': [moon_public_ip ~ '/' ~ zerotier_port]})]}) | to_nice_json }}"
+    dest: /var/lib/zerotier-one/moon.json
+    mode: '0644'
+  notify: Generate Moon file
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Create moons.d directory
+  become: true
+  ansible.builtin.file:
+    path: /var/lib/zerotier-one/moons.d
+    state: directory
+    mode: '0755'
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Trigger Moon generation immediate
+  ansible.builtin.meta: flush_handlers
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Get Moon World ID
+  ansible.builtin.set_fact:
+    moon_world_id: "{{ moon_config['id'] }}"
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Display Moon connection instructions
+  ansible.builtin.pause:
+    seconds: 10
+    prompt: |
+      **********************************************************
+      *        ZeroTier Moon Configuration Complete!           *
+      **********************************************************
+      
+      Moon World ID: {{ moon_world_id }}
+      
+      To connect other clients to this Moon, run:
+      
+          zerotier-cli orbit {{ moon_world_id }} {{ moon_world_id }}
+          
+      (Continuing in 10 seconds...)
+      **********************************************************
+  tags: [deploy, system, zerotier, phase0]

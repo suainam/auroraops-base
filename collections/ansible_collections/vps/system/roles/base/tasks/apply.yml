@@ -1,0 +1,217 @@
+---
+- name: Ensure facts.d directory exists for base baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, base, phase0]
+
+- name: Persist pre-deploy base baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ base_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "distribution": ansible_distribution,
+          "pre_deploy_timezone_link": pre_localtime_stat.stat.lnk_source | default(none),
+          "pre_deploy_timezone_content": pre_timezone_content | default(''),
+          "pre_deploy_locale_content": pre_locale_content | default(''),
+          "pre_deploy_resolv_content": pre_resolv_content | default(''),
+          "pre_deploy_fstab_content": pre_fstab_content | default(''),
+          "pre_deploy_udev_content": pre_udev_content | default(''),
+          "pre_deploy_bfq_content": pre_bfq_content | default(''),
+          "pre_deploy_services_state": pre_services_state,
+          "pre_deploy_sources_content": pre_sources_content | default('')
+        } | to_nice_json
+      }}
+  when: not base_fact_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 1. Set System Timezone ---
+- name: 设置系统时区 (软链接)
+  become: true
+  ansible.builtin.file:
+    src: "/usr/share/zoneinfo/{{ system_timezone }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+  tags: [deploy, system, base, base_timezone, phase0]
+
+- name: 设置系统时区 (配置文件)
+  become: true
+  ansible.builtin.copy:
+    content: "{{ system_timezone }}\n"
+    dest: /etc/timezone
+    mode: '0644'
+  tags: [deploy, system, base, base_timezone, phase0]
+
+# --- 2. Set System Locale ---
+- name: 设置系统字符编码
+  become: true
+  community.general.locale_gen:
+    name: '{{ system_locale }}'
+    state: present
+  tags: [deploy, system, base, base_config, base_locale, phase0]
+
+# --- 3. Set APT sources defensively ---
+- name: Manage Debian sources.list from template in base
+  become: true
+  ansible.builtin.template:
+    src: sources.list.j2
+    dest: /etc/apt/sources.list
+    backup: true
+    mode: "0644"
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, base, base_config, base_sources, phase0]
+
+- name: Update apt package index in base
+  become: true
+  ansible.builtin.command: apt-get update
+  changed_when: false
+  tags: [deploy, system, base, base_config, base_sources, phase0]
+
+# --- 4. Set NTP Timesyncd ---
+- name: 安装 NTP 客户端 (systemd-timesyncd)
+  become: true
+  ansible.builtin.command: apt-get install -y systemd-timesyncd
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: _timesyncd_install
+  changed_when: >-
+    ('0 newly installed' not in _timesyncd_install.stdout) or
+    ('0 upgraded' not in _timesyncd_install.stdout)
+  tags: [deploy, system, base, base_config, base_ntp, phase0]
+
+- name: 确保 timesyncd drop-in 目录存在
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    mode: '0755'
+  tags: [deploy, system, base, base_config, base_ntp, phase0]
+
+- name: 配置 NTP 服务器 (drop-in)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf.d/99-ntp.conf
+    content: |
+      [Time]
+      NTP={{ ntp_servers | join(' ') }}
+    owner: root
+    group: root
+    mode: '0644'
+  register: _ntp_config_update
+  tags: [deploy, system, base, base_config, base_ntp, phase0]
+
+- name: 启用并启动 systemd-timesyncd 服务
+  become: true
+  ansible.builtin.service:
+    name: systemd-timesyncd
+    enabled: true
+    state: "{{ 'restarted' if _ntp_config_update.changed else 'started' }}"
+  when: auroraops_has_systemd | default(false) | bool
+  tags: [deploy, system, base, base_config, base_ntp, phase0]
+
+# --- 4. Set DNS Nameservers ---
+- name: Determine Optimized DNS Nameservers
+  ansible.builtin.set_fact:
+    optimized_dns_servers: >-
+      {{ ['223.5.5.5', '119.29.29.29'] if (performance.geo.country | default('UNKNOWN') == 'CN') else ['8.8.8.8', '1.1.1.1'] }}
+  tags: [deploy, system, base, phase0]
+
+- name: 配置 DNS 解析服务器
+  become: true
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    dns_servers: "{{ optimized_dns_servers | default(['8.8.8.8', '1.1.1.1']) }}"
+  tags: [deploy, system, base, base_config, base_dns, phase0]
+
+# --- 5. Disable Non-Essential Services ---
+- name: 禁用非必要的系统服务 (Exim4, PackageKit, Man-DB)
+  become: true
+  ansible.builtin.systemd:
+    name: '{{ item }}'
+    state: stopped
+    enabled: false
+    masked: true
+  loop:
+    - exim4
+    - packagekit
+    - man-db.timer
+    - man-db.service
+  ignore_errors: true
+  tags: [deploy, system, base, base_optimization, base_services, phase0]
+
+# --- 6. Set I/O Scheduler (udev) ---
+- name: 检查并启用 BFQ I/O 调度模块
+  become: true
+  ansible.builtin.shell: |
+    if modprobe bfq 2>/dev/null; then
+      echo "bfq" > /etc/modules-load.d/bfq.conf
+      echo "loaded"
+    else
+      echo "unavailable"
+    fi
+  register: bfq_module_check
+  changed_when: bfq_module_check.stdout == "loaded"
+  tags: [deploy, system, base, base_tuning, base_io, phase0]
+
+- name: 配置 I/O 调度器持久化规则 (udev)
+  become: true
+  ansible.builtin.template:
+    src: 60-io-scheduler.rules.j2
+    dest: /etc/udev/rules.d/60-io-scheduler.rules
+    owner: root
+    group: root
+    mode: '0644'
+  register: _udev_rules_update
+  ignore_errors: true
+  tags: [deploy, system, base, base_tuning, base_io, phase0]
+
+- name: 立即重新加载 udev 规则
+  become: true
+  ansible.builtin.command: udevadm control --reload-rules
+  when: _udev_rules_update.changed
+  changed_when: false
+  ignore_errors: true
+  tags: [deploy, system, base, base_tuning, base_io, phase0]
+
+- name: 立即触发 udev 规则应用
+  become: true
+  ansible.builtin.command: udevadm trigger --type=devices --action=change
+  when: _udev_rules_update.changed
+  changed_when: false
+  ignore_errors: true
+  tags: [deploy, system, base, base_tuning, base_io, phase0]
+
+# --- 7. Set Fstab Disk Mount Optimization ---
+- name: 优化磁盘挂载选项 (noatime, commit=30)
+  become: true
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '(\s+ext4\s+)((?!.*noatime)[^ \t\n]+)'
+    replace: '\1\2,noatime,commit=30'
+  register: fstab_update
+  tags: [deploy, system, base, base_tuning, base_fstab, phase0]
+
+- name: 立即重新挂载根分区以应用选项
+  become: true
+  ansible.builtin.command: mount -o remount /
+  when: fstab_update.changed
+  tags: [deploy, system, base, base_tuning, base_fstab, phase0]
+
+- name: 强制清理文件系统缓存并同步磁盘 (针对机械盘调优后)
+  become: true
+  ansible.builtin.shell: sync && echo 3 > /proc/sys/vm/drop_caches
+  when: fstab_update.changed
+  tags: [deploy, system, base, base_tuning, base_fstab, phase0]

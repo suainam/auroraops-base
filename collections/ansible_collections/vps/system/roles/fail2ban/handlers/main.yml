@@ -1,0 +1,7 @@
+---
+- name: Restart fail2ban
+  become: yes
+  ansible.builtin.service:
+    name: fail2ban
+    state: restarted
+  when: not ansible_check_mode  # 在 check 模式下跳过

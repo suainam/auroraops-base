@@ -1,0 +1,25 @@
+---
+# defaults file for vps.system.systemd_priority
+
+systemd_priority_fact_path: /etc/ansible/facts.d/systemd_priority.fact
+
+systemd_priority_services:
+  - name: ssh
+    oom_score_adj: -500
+    nice: -5
+  - name: postgresql@17-main
+    oom_score_adj: -400
+    nice: null
+  - name: hermes-gateway
+    oom_score_adj: -300
+    nice: null
+  - name: nginx
+    oom_score_adj: -300
+    nice: null
+  - name: fail2ban
+    oom_score_adj: -200
+    nice: null
+  - name: redis-server
+    oom_score_adj: -200
+    nice: null
+

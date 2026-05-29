@@ -1,0 +1,70 @@
+---
+- name: Ensure facts.d directory exists for unattended_upgrades baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Persist pre-deploy unattended_upgrades baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ unattended_upgrades_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "config_path": unattended_upgrades_config_path,
+          "auto_upgrades_path": unattended_upgrades_auto_upgrades_path,
+          "pre_deploy_config_exists": unattended_upgrades_preflight.config_exists,
+          "pre_deploy_config_content": unattended_upgrades_preflight.config_content,
+          "pre_deploy_auto_upgrades_exists": unattended_upgrades_preflight.auto_upgrades_exists,
+          "pre_deploy_auto_upgrades_content": unattended_upgrades_preflight.auto_upgrades_content,
+          "pre_deploy_package_installed": unattended_upgrades_preflight.package_installed,
+          "pre_deploy_listchanges_installed": unattended_upgrades_preflight.listchanges_installed,
+          "pre_deploy_service_enabled": unattended_upgrades_preflight.service_enabled,
+          "pre_deploy_service_running": unattended_upgrades_preflight.service_running
+        } | to_nice_json
+      }}
+  when: not unattended_upgrades_fact_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Install unattended-upgrades packages
+  become: true
+  ansible.builtin.apt:
+    name:
+      - "{{ unattended_upgrades_package_name }}"
+      - "{{ unattended_upgrades_listchanges_package_name }}"
+    state: present
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Configure 50unattended-upgrades
+  become: true
+  ansible.builtin.template:
+    src: 50unattended-upgrades.j2
+    dest: "{{ unattended_upgrades_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Configure 20auto-upgrades
+  become: true
+  ansible.builtin.template:
+    src: 20auto-upgrades.j2
+    dest: "{{ unattended_upgrades_auto_upgrades_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Ensure unattended-upgrades service is enabled and running
+  become: true
+  ansible.builtin.service:
+    name: "{{ unattended_upgrades_service_name }}"
+    enabled: true
+    state: started
+  tags: [deploy, system, unattended_upgrades, phase1]

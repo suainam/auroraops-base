@@ -1,0 +1,52 @@
+# ===========================================
+# Firewall 端口管理 - 分层变量
+# ===========================================
+# 变量优先级（从高到低）:
+#   1. host_vars/<host>.yml (主机特定)
+#   2. group_vars/all/firewall.yml (全局默认)
+#   3. role/defaults/main.yml (技术默认)
+#
+# 使用规则:
+#   - firewall_tcp_ports_global: 所有主机都需要的 TCP 端口
+#   - firewall_tcp_ports_host: 主机特定 TCP 端口（在 host_vars 中定义）
+#   - firewall_tcp_ports_exclude: 主机排除的 TCP 端口（在 host_vars 中定义）
+#   - 最终列表 = global + host - exclude
+# ===========================================
+
+# 新变量（分层）
+firewall_tcp_ports_global: []
+firewall_tcp_ports_host: []
+firewall_tcp_ports_exclude: []
+
+firewall_udp_ports_global: []
+firewall_udp_ports_host: []
+firewall_udp_ports_exclude: []
+
+firewall_fact_path: /etc/ansible/facts.d/firewall.fact
+firewall_baseline_version: 1
+firewall_managed_files:
+  - /etc/default/ufw
+  - /etc/ufw/after.init
+  - /etc/ufw/before.rules
+  - /etc/ufw/before6.rules
+  - /etc/ufw/user.rules
+  - /etc/ufw/user6.rules
+firewall_managed_dirs:
+  - /etc/ufw
+firewall_forward_sysctls:
+  - net.ipv4.ip_forward
+  - net.ipv6.conf.all.forwarding
+
+# 旧变量（保留兼容，已废弃）
+# 注意：SSH 端口由 ssh_port 单独控制；不要在兼容列表里重复硬编码 22。
+firewall_allow_tcp_ports:
+  - 80
+  - 443
+  - "{{ ssh_port }}"
+
+firewall_allow_udp_ports: []
+
+firewall_hysteria_hopping:
+  enabled: false
+  port_range: "{{ app_port_hysteria_hopping_range }}"
+  target_port: "{{ app_port_singbox_hysteria }}"

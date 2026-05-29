@@ -1,0 +1,213 @@
+- name: Check python_environment baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ python_environment_fact_path }}"
+  register: python_environment_fact_stat
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Read existing python_environment baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ python_environment_fact_path }}"
+  register: python_environment_fact_raw
+  when: python_environment_fact_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Parse existing python_environment baseline
+  ansible.builtin.set_fact:
+    python_environment_baseline: "{{ python_environment_fact_raw.content | b64decode | from_json }}"
+  when: python_environment_fact_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Check current canonical venv path state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ system_python_venv_path }}"
+    follow: false
+  register: python_environment_path_stat
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Check current canonical venv python binary
+  become: true
+  ansible.builtin.stat:
+    path: "{{ system_python_venv_path }}/bin/python3"
+  register: python_environment_python_stat
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Check current canonical venv pip binary
+  become: true
+  ansible.builtin.stat:
+    path: "{{ system_python_venv_path }}/bin/pip"
+  register: python_environment_pip_stat
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Check current pip.conf state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ python_environment_pip_conf_path }}"
+  register: python_environment_pip_conf_stat
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Read current pip.conf
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ python_environment_pip_conf_path }}"
+  register: python_environment_pip_conf_raw
+  when: python_environment_pip_conf_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Parse current pip.conf content
+  ansible.builtin.set_fact:
+    python_environment_pip_conf_content: "{{ python_environment_pip_conf_raw.content | b64decode }}"
+  when: python_environment_pip_conf_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Check system python venv support
+  ansible.builtin.command: python3 -c "import ensurepip, venv"
+  register: python_environment_system_venv_support
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Resolve preferred pip host
+  ansible.builtin.set_fact:
+    python_preferred_pip_host: "{{ python_preferred_pip_index_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
+    python_fallback_pip_host: "{{ python_fallback_pip_index_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Probe preferred pip index DNS
+  ansible.builtin.command: "getent ahosts {{ python_preferred_pip_host }}"
+  register: python_preferred_pip_dns
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Probe fallback pip index DNS
+  ansible.builtin.command: "getent ahosts {{ python_fallback_pip_host }}"
+  register: python_fallback_pip_dns
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Probe preferred pip index latency
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; host='{{ python_preferred_pip_host }}'; port=443; start=time.time(); sock=socket.create_connection((host, port), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: python_preferred_pip_ping
+  changed_when: false
+  failed_when: false
+  when: python_preferred_pip_dns.rc == 0
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Probe fallback pip index latency
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; host='{{ python_fallback_pip_host }}'; port=443; start=time.time(); sock=socket.create_connection((host, port), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: python_fallback_pip_ping
+  changed_when: false
+  failed_when: false
+  when: python_fallback_pip_dns.rc == 0
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Select defensive pip source strategy
+  ansible.builtin.set_fact:
+    python_selected_pip_index_url: >-
+      {{
+        python_preferred_pip_index_url
+        if (python_preferred_pip_dns.rc == 0)
+        else python_fallback_pip_index_url
+      }}
+    python_selected_pip_host: >-
+      {{
+        python_preferred_pip_host
+        if (python_preferred_pip_dns.rc == 0)
+        else python_fallback_pip_host
+      }}
+    python_selected_pip_strategy: >-
+      {{
+        'preferred_tsinghua'
+        if (python_preferred_pip_dns.rc == 0)
+        else ('fallback_official' if (python_fallback_pip_dns.rc == 0) else 'preferred_unreachable')
+      }}
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Refuse python_environment apply when neither preferred nor fallback pip source resolves
+  ansible.builtin.fail:
+    msg: >-
+      Neither preferred pip source {{ python_preferred_pip_index_url }} nor fallback source
+      {{ python_fallback_pip_index_url }} is resolvable from target host.
+  when:
+    - python_preferred_pip_dns.rc != 0
+    - python_fallback_pip_dns.rc != 0
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Probe reusable bootstrap venv candidates
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}/bin/python3"
+  loop: "{{ bootstrap_venv_search_paths }}"
+  register: python_environment_bootstrap_checks
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Collect reusable bootstrap venv candidates
+  ansible.builtin.set_fact:
+    python_environment_detected_bootstrap_venvs: >-
+      {{
+        python_environment_bootstrap_checks.results
+        | selectattr('stat.exists')
+        | map(attribute='item')
+        | list
+      }}
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Validate existing python_environment baseline
+  ansible.builtin.assert:
+    that:
+      - python_environment_baseline.auroraops_managed | default(false) | bool
+      - python_environment_baseline.version | default(0) | int >= 1
+      - python_environment_baseline.system_python_venv_path == system_python_venv_path
+      - python_environment_baseline.pre_deploy_path_exists is defined
+      - python_environment_baseline.pre_deploy_path_islnk is defined
+      - python_environment_baseline.pre_deploy_path_isdir is defined
+      - python_environment_baseline.pre_deploy_link_target is defined
+      - python_environment_baseline.pre_deploy_python_present is defined
+      - python_environment_baseline.pre_deploy_pip_present is defined
+      - python_environment_baseline.pre_deploy_pip_conf_exists is defined
+      - python_environment_baseline.pre_deploy_pip_conf_content is defined
+    fail_msg: "Existing python_environment baseline is invalid or belongs to another canonical venv path"
+  when: python_environment_fact_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Refuse unmanaged pre-existing canonical venv path
+  ansible.builtin.fail:
+    msg: >-
+      Found unmanaged pre-existing canonical venv path at {{ system_python_venv_path }}.
+      Stateful rollback cannot safely reconstruct arbitrary pre-deploy contents.
+  when:
+    - not python_environment_fact_stat.stat.exists
+    - python_environment_path_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Explain ignored external bootstrap venv candidates
+  ansible.builtin.debug:
+    msg: >-
+      Detected reusable bootstrap venv candidates {{ python_environment_detected_bootstrap_venvs }},
+      but stateful mode will create/manage {{ system_python_venv_path }} directly instead of linking external environments.
+  when:
+    - not python_environment_fact_stat.stat.exists
+    - not python_environment_path_stat.stat.exists
+    - (python_environment_detected_bootstrap_venvs | length) > 0
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Summarize python_environment preflight decision
+  ansible.builtin.debug:
+    msg: >-
+      BaselineExists={{ python_environment_fact_stat.stat.exists | bool }}
+      PathExists={{ python_environment_path_stat.stat.exists | default(false) }}
+      PathIsLink={{ python_environment_path_stat.stat.islnk | default(false) }}
+      PathIsDir={{ python_environment_path_stat.stat.isdir | default(false) }}
+      PythonPresent={{ python_environment_python_stat.stat.exists | default(false) }}
+      PipPresent={{ python_environment_pip_stat.stat.exists | default(false) }}
+      SystemVenvReady={{ python_environment_system_venv_support.rc == 0 }}
+      PipStrategy={{ python_selected_pip_strategy }}
+      PreferredPipRttMs={{ python_preferred_pip_ping.stdout | default('n/a') }}
+      FallbackPipRttMs={{ python_fallback_pip_ping.stdout | default('n/a') }}
+  tags: [deploy, system, python_environment, phase1]

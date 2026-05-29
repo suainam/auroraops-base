@@ -1,0 +1,191 @@
+- name: Check firewall baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ firewall_fact_path }}"
+  register: firewall_fact_stat
+  tags: [deploy, system, firewall, phase1]
+
+- name: Read existing firewall baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ firewall_fact_path }}"
+  register: firewall_fact_raw
+  when: firewall_fact_stat.stat.exists
+  tags: [deploy, system, firewall, phase1]
+
+- name: Parse existing firewall baseline
+  ansible.builtin.set_fact:
+    firewall_baseline: "{{ firewall_fact_raw.content | b64decode | from_json }}"
+  when: firewall_fact_stat.stat.exists
+  tags: [deploy, system, firewall, phase1]
+
+- name: Validate existing firewall baseline
+  ansible.builtin.assert:
+    that:
+      - firewall_baseline.auroraops_managed | default(false) | bool
+      - firewall_baseline.version | default(0) | int >= firewall_baseline_version
+      - firewall_baseline.ssh_port is defined
+      - firewall_baseline.managed_files is defined
+      - firewall_baseline.managed_dirs is defined
+      - firewall_baseline.pre_deploy_managed_files is defined
+      - firewall_baseline.pre_deploy_managed_dirs is defined
+      - firewall_baseline.pre_deploy_ufw_pkg_installed is defined
+      - firewall_baseline.pre_deploy_nftables_pkg_installed is defined
+      - firewall_baseline.pre_deploy_sysctl_values is defined
+      - firewall_baseline.pre_deploy_ufw_status_verbose is defined
+    fail_msg: "Existing firewall baseline is invalid"
+  when: firewall_fact_stat.stat.exists
+  tags: [deploy, system, firewall, phase1]
+
+- name: Check current firewall managed directories
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ firewall_managed_dirs }}"
+  register: firewall_managed_dir_stats
+  tags: [deploy, system, firewall, phase1]
+
+- name: Assemble current firewall managed directory baseline
+  ansible.builtin.set_fact:
+    firewall_current_managed_dirs: >-
+      {{
+        firewall_current_managed_dirs | default({}) |
+        combine({
+          item.item: {
+            'exists': item.stat.exists | default(false),
+            'mode': item.stat.mode | default('0755')
+          }
+        }, recursive=True)
+      }}
+  loop: "{{ firewall_managed_dir_stats.results }}"
+  tags: [deploy, system, firewall, phase1]
+
+- name: Check current firewall managed files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ firewall_managed_files }}"
+  register: firewall_managed_file_stats
+  tags: [deploy, system, firewall, phase1]
+
+- name: Read current firewall managed files
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ item.item }}"
+  loop: "{{ firewall_managed_file_stats.results }}"
+  register: firewall_managed_file_raw
+  when: item.stat.exists | default(false)
+  tags: [deploy, system, firewall, phase1]
+
+- name: Assemble current firewall managed file baseline
+  ansible.builtin.set_fact:
+    firewall_current_managed_files: >-
+      {{
+        firewall_current_managed_files | default({}) |
+        combine({
+          item.item.item: {
+            'exists': true,
+            'content': item.content | b64decode
+          }
+        })
+      }}
+  loop: "{{ firewall_managed_file_raw.results | default([]) }}"
+  when: not (item.skipped | default(false))
+  tags: [deploy, system, firewall, phase1]
+
+- name: Fill absent firewall managed file baseline
+  ansible.builtin.set_fact:
+    firewall_current_managed_files: >-
+      {{
+        firewall_current_managed_files | default({}) |
+        combine({
+          item.item: {
+            'exists': item.stat.exists | default(false),
+            'content': ''
+          }
+        }, recursive=True)
+      }}
+  loop: "{{ firewall_managed_file_stats.results }}"
+  tags: [deploy, system, firewall, phase1]
+
+- name: Check current UFW package state
+  ansible.builtin.command: dpkg-query -W -f='${Status}' ufw
+  register: firewall_ufw_package_status
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Check current nftables package state
+  ansible.builtin.command: dpkg-query -W -f='${Status}' nftables
+  register: firewall_nftables_package_status
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Read current UFW status verbose
+  become: true
+  check_mode: false
+  ansible.builtin.command: ufw status verbose
+  register: firewall_ufw_status_verbose
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Read current UFW status numbered
+  become: true
+  check_mode: false
+  ansible.builtin.command: ufw status numbered
+  register: firewall_ufw_status_numbered
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Get default network interface
+  ansible.builtin.shell: "ip route show default | awk '/default/ {print $5; exit}'"
+  register: default_network_interface_result
+  changed_when: false
+  check_mode: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Set default network interface fact
+  ansible.builtin.set_fact:
+    default_network_interface: "{{ default_network_interface_result.stdout }}"
+  tags: [deploy, system, firewall, phase1]
+
+- name: Read current forwarding sysctl values
+  become: true
+  check_mode: false
+  ansible.builtin.command: "sysctl -n {{ item }}"
+  loop: "{{ firewall_forward_sysctls }}"
+  register: firewall_sysctl_checks
+  changed_when: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Assemble current firewall sysctl baseline
+  ansible.builtin.set_fact:
+    firewall_current_sysctl_values: "{{ dict(firewall_sysctl_checks.results | map(attribute='item') | zip(firewall_sysctl_checks.results | map(attribute='stdout'))) }}"
+  tags: [deploy, system, firewall, phase1]
+
+- name: Determine current firewall package presence
+  ansible.builtin.set_fact:
+    firewall_ufw_pkg_installed: "{{ firewall_ufw_package_status.rc == 0 and ('install ok installed' in firewall_ufw_package_status.stdout) }}"
+    firewall_nftables_pkg_installed: "{{ firewall_nftables_package_status.rc == 0 and ('install ok installed' in firewall_nftables_package_status.stdout) }}"
+  tags: [deploy, system, firewall, phase1]
+
+- name: Check current UFW enablement state
+  become: true
+  check_mode: false
+  ansible.builtin.command: systemctl is-enabled ufw
+  register: firewall_ufw_enabled_check
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, firewall, phase1]
+
+- name: Record current SSH allow visibility
+  ansible.builtin.set_fact:
+    firewall_current_ssh_allowed: >-
+      {{
+        ((ssh_port | string) + '/tcp') in (firewall_ufw_status_verbose.stdout | default(''))
+        or ((ssh_port | string) in (firewall_ufw_status_numbered.stdout | default('')))
+      }}
+  tags: [deploy, system, firewall, phase1]

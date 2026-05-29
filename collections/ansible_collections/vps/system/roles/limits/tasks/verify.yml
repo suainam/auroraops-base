@@ -1,0 +1,72 @@
+- name: Check limits baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_fact_path }}"
+  register: limits_fact_stat
+  tags: [verify, system, limits, phase0]
+
+- name: Verify limits baseline exists
+  ansible.builtin.assert:
+    that:
+      - limits_fact_stat.stat.exists
+    fail_msg: "Limits baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, limits, phase0, limits_verify_baseline]
+
+- name: Read limits baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ limits_fact_path }}"
+  register: limits_fact_raw
+  tags: [verify, system, limits, phase0]
+
+- name: Parse limits baseline
+  ansible.builtin.set_fact:
+    limits_baseline: "{{ limits_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, limits, phase0]
+
+- name: Verify limits baseline metadata
+  ansible.builtin.assert:
+    that:
+      - limits_baseline.auroraops_managed | default(false) | bool
+      - limits_baseline.version | default(0) | int >= 1
+      - limits_baseline.managed_file == limits_managed_file
+      - limits_baseline.pre_deploy_content is defined
+    fail_msg: "Limits baseline content is invalid"
+  tags: [verify, system, limits, phase0, limits_verify_baseline]
+
+- name: Build expected limits content
+  ansible.builtin.set_fact:
+    limits_expected_lines:
+      - "* soft nofile {{ limits_nofile }}"
+      - "* hard nofile {{ limits_nofile }}"
+      - "root soft nofile {{ limits_nofile }}"
+      - "root hard nofile {{ limits_nofile }}"
+  tags: [verify, system, limits, phase0]
+
+- name: Verify managed limits file exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_managed_file }}"
+  register: limits_managed_file_stat
+  failed_when: not limits_managed_file_stat.stat.exists
+  tags: [verify, system, limits, phase0, limits_verify_file_exists]
+
+- name: Read managed limits file
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ limits_managed_file }}"
+  register: limits_managed_file_raw
+  tags: [verify, system, limits, phase0, limits_verify_file_content]
+
+- name: Parse managed limits file
+  ansible.builtin.set_fact:
+    limits_managed_file_content: "{{ limits_managed_file_raw.content | b64decode }}"
+  tags: [verify, system, limits, phase0, limits_verify_file_content]
+
+- name: Assert managed limits content matches desired values
+  ansible.builtin.assert:
+    that:
+      - item in limits_managed_file_content
+    fail_msg: "Managed limits file is missing expected line: {{ item }}"
+  loop: "{{ limits_expected_lines }}"
+  tags: [verify, system, limits, phase0, limits_verify_file_content]

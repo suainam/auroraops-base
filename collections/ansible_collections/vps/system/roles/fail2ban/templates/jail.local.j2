@@ -1,0 +1,53 @@
+# /etc/fail2ban/jail.local
+#
+# This file overrides the settings in jail.conf
+# It is recommended to make all changes in this file to avoid conflicts during package updates.
+
+[DEFAULT]
+# Ban hosts for a specific amount of time (in seconds).
+bantime = {{ fail2ban_bantime }}
+
+# A host is banned if it has generated "maxretry" matches within "findtime" seconds.
+findtime = {{ fail2ban_findtime }}
+
+# Number of times a host can fail before it is banned.
+maxretry = {{ fail2ban_maxretry }}
+
+# IP addresses or CIDR masks to ignore.
+# These IPs will never be banned.
+ignoreip = {% for ip in fail2ban_ignoreip %}{{ ip }} {% endfor %}
+
+# Action to take when a host is banned.
+# The default action is to use iptables to ban the IP.
+# action = %(action_mwl)s
+
+# SSHD Jail
+[sshd]
+enabled = true
+port = {{ ssh_port }}
+backend = systemd
+
+# Nginx Jails (Optional, uncomment and configure if needed)
+# [nginx-http-auth]
+# enabled = false
+# port = http,https
+# logpath = /var/log/nginx/error.log
+# maxretry = 5
+# findtime = 300
+#
+# [nginx-dos]
+# enabled = false
+# port = http,https
+# logpath = /var/log/nginx/access.log
+# maxretry = 100
+# findtime = 60
+# action = %(action_mwl)s[name=nginx-dos, port="http,https", protocol=tcp]
+#
+# [nginx-badbots]
+# enabled = false
+# port = http,https
+# logpath = /var/log/nginx/access.log
+# maxretry = 2
+# findtime = 86400
+# banaction = nftables-all
+# action = %(action_mwl)s

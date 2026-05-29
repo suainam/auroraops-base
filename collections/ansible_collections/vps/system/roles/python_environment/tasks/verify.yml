@@ -1,0 +1,100 @@
+- name: Check python_environment baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ python_environment_fact_path }}"
+  register: python_environment_fact_stat
+  tags: [verify, system, python_environment, phase1]
+
+- name: Verify python_environment baseline exists
+  ansible.builtin.assert:
+    that:
+      - python_environment_fact_stat.stat.exists
+    fail_msg: "python_environment baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, python_environment, phase1, python_environment_verify_baseline]
+
+- name: Read python_environment baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ python_environment_fact_path }}"
+  register: python_environment_fact_raw
+  tags: [verify, system, python_environment, phase1]
+
+- name: Parse python_environment baseline
+  ansible.builtin.set_fact:
+    python_environment_baseline: "{{ python_environment_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, python_environment, phase1]
+
+- name: Verify python_environment baseline metadata
+  ansible.builtin.assert:
+    that:
+      - python_environment_baseline.auroraops_managed | default(false) | bool
+      - python_environment_baseline.version | default(0) | int >= 1
+      - python_environment_baseline.system_python_venv_path == system_python_venv_path
+      - python_environment_baseline.pre_deploy_path_exists is defined
+      - python_environment_baseline.pre_deploy_path_islnk is defined
+      - python_environment_baseline.pre_deploy_path_isdir is defined
+      - python_environment_baseline.pre_deploy_link_target is defined
+      - python_environment_baseline.pre_deploy_python_present is defined
+      - python_environment_baseline.pre_deploy_pip_present is defined
+      - python_environment_baseline.pre_deploy_pip_conf_exists is defined
+      - python_environment_baseline.pre_deploy_pip_conf_content is defined
+    fail_msg: "python_environment baseline content is invalid"
+  tags: [verify, system, python_environment, phase1, python_environment_verify_baseline]
+
+- name: Verify managed pip.conf exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ python_environment_pip_conf_path }}"
+  register: python_environment_verify_pip_conf_stat
+  failed_when: not python_environment_verify_pip_conf_stat.stat.exists
+  tags: [verify, system, python_environment, phase1]
+
+- name: Verify managed pip.conf content
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ python_environment_pip_conf_path }}"
+  register: python_environment_verify_pip_conf_raw
+  tags: [verify, system, python_environment, phase1]
+
+- name: Assert managed pip.conf points to selected pip source
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('index-url = ' ~ python_preferred_pip_index_url) in (python_environment_verify_pip_conf_raw.content | b64decode)
+        or
+        ('index-url = ' ~ python_fallback_pip_index_url) in (python_environment_verify_pip_conf_raw.content | b64decode)
+      - >-
+        ('trusted-host = ' ~ (python_preferred_pip_index_url | regex_replace('^https?://', '') | regex_replace('/.*$', ''))) in (python_environment_verify_pip_conf_raw.content | b64decode)
+        or
+        ('trusted-host = ' ~ (python_fallback_pip_index_url | regex_replace('^https?://', '') | regex_replace('/.*$', ''))) in (python_environment_verify_pip_conf_raw.content | b64decode)
+    fail_msg: "managed pip.conf does not point to an allowed defensive pip source"
+  tags: [verify, system, python_environment, phase1]
+
+- name: '[Python Environment] 验证 Unified 虚拟环境目录是否存在'
+  become: true
+  ansible.builtin.stat:
+    path: "{{ system_python_venv_path }}"
+  register: venv_dir_check
+  failed_when: not venv_dir_check.stat.exists or not venv_dir_check.stat.isdir
+  tags: [verify, system, python_environment, phase1]
+
+- name: '[Python Environment] 验证 虚拟环境中的 Python 二进制文件'
+  ansible.builtin.command: "{{ system_python_venv_path }}/bin/python3 --version"
+  register: venv_python_check
+  changed_when: false
+  failed_when: venv_python_check.rc != 0
+  tags: [verify, system, python_environment, phase1]
+
+- name: '[Python Environment] 验证 虚拟环境中的 Pip 二进制文件'
+  ansible.builtin.command: "{{ system_python_venv_path }}/bin/pip --version"
+  register: venv_pip_check
+  changed_when: false
+  failed_when: venv_pip_check.rc != 0
+  tags: [verify, system, python_environment, phase1]
+
+- name: '[Python Environment] 验证 基础包是否在虚拟环境中可用 (cryptography)'
+  ansible.builtin.command: "{{ system_python_venv_path }}/bin/python3 -c 'import cryptography; print(cryptography.__version__)'"
+  register: package_import_check
+  changed_when: false
+  failed_when: package_import_check.rc != 0
+  tags: [verify, system, python_environment, phase1]

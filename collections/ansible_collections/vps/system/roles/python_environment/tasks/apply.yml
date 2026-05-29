@@ -1,0 +1,89 @@
+- name: Ensure facts.d directory exists for python_environment baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Persist pre-deploy python_environment baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ python_environment_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "system_python_venv_path": system_python_venv_path,
+          "pre_deploy_path_exists": python_environment_path_stat.stat.exists | default(false),
+          "pre_deploy_path_islnk": python_environment_path_stat.stat.islnk | default(false),
+          "pre_deploy_path_isdir": python_environment_path_stat.stat.isdir | default(false),
+          "pre_deploy_link_target": python_environment_path_stat.stat.lnk_source | default(''),
+          "pre_deploy_python_present": python_environment_python_stat.stat.exists | default(false),
+          "pre_deploy_pip_present": python_environment_pip_stat.stat.exists | default(false),
+          "pre_deploy_pip_conf_exists": python_environment_pip_conf_stat.stat.exists | default(false),
+          "pre_deploy_pip_conf_content": python_environment_pip_conf_content | default('')
+        } | to_nice_json
+      }}
+  when: not python_environment_fact_stat.stat.exists
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Install base Python system packages when venv support is missing
+  become: true
+  ansible.builtin.shell: |
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold" \
+      python{{ python_version }}-pip \
+      python{{ python_version }}-venv \
+      python{{ python_version }}-dev \
+      build-essential \
+      libssl-dev \
+      libffi-dev
+  register: apt_install_result
+  changed_when: "'0 upgraded, 0 newly installed' not in apt_install_result.stdout"
+  when: python_environment_system_venv_support.rc != 0
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Manage system pip.conf with defensive source ordering
+  become: true
+  ansible.builtin.template:
+    src: pip.conf.j2
+    dest: "{{ python_environment_pip_conf_path }}"
+    mode: "0644"
+  vars:
+    pip_index_url: "{{ python_selected_pip_index_url }}"
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Create managed canonical venv
+  become: true
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ system_python_venv_path }} --upgrade-deps"
+    creates: "{{ system_python_venv_path }}/bin/python3"
+  environment:
+    PIP_INDEX_URL: "{{ python_selected_pip_index_url }}"
+    PIP_TRUSTED_HOST: "{{ python_selected_pip_host }}"
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Install base packages into managed canonical venv
+  become: true
+  ansible.builtin.shell:
+    cmd: "{{ system_python_venv_path }}/bin/python3 -m pip install --upgrade {{ python_base_packages | join(' ') }}"
+  environment:
+    http_proxy: "{{ proxy_http | default('') }}"
+    https_proxy: "{{ proxy_https | default('') }}"
+    PIP_INDEX_URL: "{{ python_selected_pip_index_url }}"
+    PIP_TRUSTED_HOST: "{{ python_selected_pip_host }}"
+  tags: [deploy, system, python_environment, phase1]
+
+- name: Ensure managed canonical venv permissions
+  become: true
+  ansible.builtin.file:
+    path: "{{ system_python_venv_path }}/"
+    state: directory
+    owner: root
+    group: root
+    recurse: true
+  tags: [deploy, system, python_environment, phase1]

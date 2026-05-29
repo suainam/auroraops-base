@@ -1,0 +1,340 @@
+---
+- name: Gather base system distribution facts
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - distribution
+  tags: [deploy, system, base, phase0]
+
+- name: Check base baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ base_fact_path }}"
+  register: base_fact_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read base baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ base_fact_path }}"
+  register: base_fact_raw
+  when: base_fact_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse base baseline
+  ansible.builtin.set_fact:
+    base_baseline: "{{ base_fact_raw.content | b64decode | from_json }}"
+  when: base_fact_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 1. Gather Timezone & Locale Baseline ---
+- name: Check current /etc/localtime state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/localtime
+  register: pre_localtime_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Check current /etc/timezone state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/timezone
+  register: pre_timezone_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current /etc/timezone
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/timezone
+  register: pre_timezone_raw
+  when: pre_timezone_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse timezone contents
+  ansible.builtin.set_fact:
+    pre_timezone_content: "{{ pre_timezone_raw.content | b64decode | trim }}"
+  when: pre_timezone_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Check current /etc/default/locale state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/default/locale
+  register: pre_locale_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current /etc/default/locale
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/default/locale
+  register: pre_locale_raw
+  when: pre_locale_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse locale contents
+  ansible.builtin.set_fact:
+    pre_locale_content: "{{ pre_locale_raw.content | b64decode }}"
+  when: pre_locale_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 2. Gather DNS Resolver Baseline ---
+- name: Check current resolv.conf state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+  register: pre_resolv_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current resolv.conf
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/resolv.conf
+  register: pre_resolv_raw
+  when: pre_resolv_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse resolv.conf contents
+  ansible.builtin.set_fact:
+    pre_resolv_content: "{{ pre_resolv_raw.content | b64decode }}"
+  when: pre_resolv_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 3. Gather Fstab Baseline ---
+- name: Check current fstab state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/fstab
+  register: pre_fstab_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current fstab
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/fstab
+  register: pre_fstab_raw
+  when: pre_fstab_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse fstab contents
+  ansible.builtin.set_fact:
+    pre_fstab_content: "{{ pre_fstab_raw.content | b64decode }}"
+  when: pre_fstab_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 4. Gather Timesyncd / NTP Baseline ---
+- name: Check current timesyncd conf state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/systemd/timesyncd.conf.d/99-ntp.conf
+  register: pre_timesyncd_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current timesyncd conf
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/systemd/timesyncd.conf.d/99-ntp.conf
+  register: pre_timesyncd_raw
+  when: pre_timesyncd_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse timesyncd conf contents
+  ansible.builtin.set_fact:
+    pre_timesyncd_content: "{{ pre_timesyncd_raw.content | b64decode }}"
+  when: pre_timesyncd_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 5. Gather Services Baseline ---
+- name: Gather service facts for base
+  become: true
+  ansible.builtin.service_facts:
+  tags: [deploy, system, base, phase0]
+
+- name: Parse relevant services baseline
+  ansible.builtin.set_fact:
+    pre_services_state:
+      exim4: "{{ ansible_facts.services['exim4.service'] | default(none) }}"
+      packagekit: "{{ ansible_facts.services['packagekit.service'] | default(none) }}"
+      man_db_timer: "{{ ansible_facts.services['man-db.timer'] | default(none) }}"
+      man_db_service: "{{ ansible_facts.services['man-db.service'] | default(none) }}"
+      timesyncd: "{{ ansible_facts.services['systemd-timesyncd.service'] | default(none) }}"
+  tags: [deploy, system, base, phase0]
+
+# --- 6. Gather I/O Scheduler Baseline ---
+- name: Check current udev rules state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/udev/rules.d/60-io-scheduler.rules
+  register: pre_udev_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current udev rules
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/udev/rules.d/60-io-scheduler.rules
+  register: pre_udev_raw
+  when: pre_udev_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse udev rules contents
+  ansible.builtin.set_fact:
+    pre_udev_content: "{{ pre_udev_raw.content | b64decode }}"
+  when: pre_udev_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Check current bfq conf state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/modules-load.d/bfq.conf
+  register: pre_bfq_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current bfq conf
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/modules-load.d/bfq.conf
+  register: pre_bfq_raw
+  when: pre_bfq_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse bfq conf contents
+  ansible.builtin.set_fact:
+    pre_bfq_content: "{{ pre_bfq_raw.content | b64decode }}"
+  when: pre_bfq_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+# --- 7. Gather APT Sources Baseline & Probe Mirror DNS ---
+- name: Check current sources.list state
+  become: true
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: pre_sources_stat
+  tags: [deploy, system, base, phase0]
+
+- name: Read current sources.list
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/apt/sources.list
+  register: pre_sources_raw
+  when: pre_sources_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Parse current sources.list content
+  ansible.builtin.set_fact:
+    pre_sources_content: "{{ pre_sources_raw.content | b64decode }}"
+  when: pre_sources_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Resolve apt hostnames for base
+  ansible.builtin.set_fact:
+    base_tsinghua_apt_host: "mirrors.tuna.tsinghua.edu.cn"
+    base_fallback_apt_host: "deb.debian.org"
+  tags: [deploy, system, base, phase0]
+
+- name: Probe Tsinghua apt mirror DNS
+  ansible.builtin.command: "getent ahosts {{ base_tsinghua_apt_host }}"
+  register: base_tsinghua_dns_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, base, phase0]
+
+- name: Probe Fallback apt mirror DNS
+  ansible.builtin.command: "getent ahosts {{ base_fallback_apt_host }}"
+  register: base_fallback_dns_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, base, phase0]
+
+- name: Determine DNS check states
+  ansible.builtin.set_fact:
+    base_apt_mirror_dns_ok: "{{ base_tsinghua_dns_check.rc == 0 }}"
+    base_fallback_dns_ok: "{{ base_fallback_dns_check.rc == 0 }}"
+  tags: [deploy, system, base, phase0]
+
+- name: Probe Tsinghua apt mirror latency
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; start=time.time(); sock=socket.create_connection(('{{ base_tsinghua_apt_host }}', 443), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: base_tsinghua_ping
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: base_apt_mirror_dns_ok | bool
+  tags: [deploy, system, base, phase0]
+
+- name: Probe Fallback apt mirror latency
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; start=time.time(); sock=socket.create_connection(('{{ base_fallback_apt_host }}', 80), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: base_fallback_ping
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: base_fallback_dns_ok | bool
+  tags: [deploy, system, base, phase0]
+
+- name: Choose apt mirror URLs defensively
+  ansible.builtin.set_fact:
+    base_selected_apt_mirror_url: >-
+      {{
+        'https://mirrors.tuna.tsinghua.edu.cn/debian'
+        if (base_apt_mirror_dns_ok | bool and base_tsinghua_ping.rc | default(1) == 0)
+        else 'http://deb.debian.org/debian'
+      }}
+    base_selected_apt_security_url: >-
+      {{
+        'https://mirrors.tuna.tsinghua.edu.cn/debian-security'
+        if (base_apt_mirror_dns_ok | bool and base_tsinghua_ping.rc | default(1) == 0)
+        else 'http://deb.debian.org/debian-security'
+      }}
+    base_selected_apt_strategy: >-
+      {{
+        'preferred_tsinghua'
+        if (base_apt_mirror_dns_ok | bool and base_tsinghua_ping.rc | default(1) == 0)
+        else ('fallback_official' if (base_fallback_dns_ok | bool and base_fallback_ping.rc | default(1) == 0) else 'unreachable')
+      }}
+  tags: [deploy, system, base, phase0]
+
+- name: Fail if neither primary nor fallback apt mirrors are accessible
+  ansible.builtin.fail:
+    msg: "Neither Tsinghua apt mirror nor fallback official debian mirror is accessible."
+  when:
+    - not ansible_check_mode
+    - base_selected_apt_strategy == 'unreachable'
+  tags: [deploy, system, base, phase0]
+
+# --- 8. Validate Existing Baseline Metadata ---
+- name: Validate existing base baseline
+  ansible.builtin.assert:
+    that:
+      - base_baseline.auroraops_managed | default(false) | bool
+      - base_baseline.version | default(0) | int >= 1
+      - base_baseline.pre_deploy_timezone_link is defined
+      - base_baseline.pre_deploy_timezone_content is defined
+      - base_baseline.pre_deploy_locale_content is defined
+      - base_baseline.pre_deploy_resolv_content is defined
+      - base_baseline.pre_deploy_fstab_content is defined
+      - base_baseline.pre_deploy_udev_content is defined
+      - base_baseline.pre_deploy_bfq_content is defined
+      - base_baseline.pre_deploy_services_state is defined
+      - base_baseline.pre_deploy_sources_content is defined
+    fail_msg: "Existing base baseline fact file is invalid"
+  when: base_fact_stat.stat.exists
+  tags: [deploy, system, base, phase0]
+
+- name: Summarize base preflight
+  ansible.builtin.debug:
+    msg: >-
+      Distribution={{ ansible_distribution }}
+      BaselineExists={{ base_fact_stat.stat.exists | bool }}
+      TimezoneLink={{ pre_localtime_stat.stat.lnk_source | default('n/a') }}
+      TimezoneContent={{ pre_timezone_content | default('n/a') }}
+      LocaleExists={{ pre_locale_stat.stat.exists | bool }}
+      ResolvExists={{ pre_resolv_stat.stat.exists | bool }}
+      FstabExists={{ pre_fstab_stat.stat.exists | bool }}
+      UdevExists={{ pre_udev_stat.stat.exists | bool }}
+      BfqExists={{ pre_bfq_stat.stat.exists | bool }}
+      AptMirrorOk={{ base_apt_mirror_dns_ok }}
+      SelectedMirror={{ base_selected_apt_mirror_url }}
+      SelectedStrategy={{ base_selected_apt_strategy }}
+  tags: [deploy, system, base, phase0]

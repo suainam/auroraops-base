@@ -1,0 +1,4 @@
+---
+- name: Include base verification tasks
+  ansible.builtin.include_tasks: tasks/verify.yml
+  tags: [verify, phase2, system, base]

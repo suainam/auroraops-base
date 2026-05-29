@@ -1,0 +1,13 @@
+# 默认注释了源码镜像以提高 apt update 速度，如有需要可自行取消注释
+deb {{ init_selected_apt_mirror_url | default(init_effective_apt_mirror_url) }} {{ ansible_distribution_release }} main contrib non-free non-free-firmware
+# deb-src {{ init_selected_apt_mirror_url | default(init_effective_apt_mirror_url) }} {{ ansible_distribution_release }} main contrib non-free non-free-firmware
+
+deb {{ init_selected_apt_mirror_url | default(init_effective_apt_mirror_url) }} {{ ansible_distribution_release }}-updates main contrib non-free non-free-firmware
+# deb-src {{ init_selected_apt_mirror_url | default(init_effective_apt_mirror_url) }} {{ ansible_distribution_release }}-updates main contrib non-free non-free-firmware
+
+deb {{ init_selected_apt_mirror_url | default(init_effective_apt_mirror_url) }} {{ ansible_distribution_release }}-backports main contrib non-free non-free-firmware
+# deb-src {{ init_selected_apt_mirror_url | default(init_effective_apt_mirror_url) }} {{ ansible_distribution_release }}-backports main contrib non-free non-free-firmware
+
+# 安全更新使用镜像源
+deb {{ init_selected_apt_security_url | default(init_effective_apt_security_url) }} {{ ansible_distribution_release }}-security main contrib non-free non-free-firmware
+# deb-src {{ init_selected_apt_security_url | default(init_effective_apt_security_url) }} {{ ansible_distribution_release }}-security main contrib non-free non-free-firmware

@@ -1,0 +1,306 @@
+---
+- name: Check base baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ base_fact_path }}"
+  register: base_fact_stat
+  tags: [rollback, system, base, phase0]
+
+- name: Check base custom config presence
+  become: true
+  ansible.builtin.stat:
+    path: /etc/systemd/timesyncd.conf.d/99-ntp.conf
+  register: base_timesyncd_conf_stat
+  tags: [rollback, system, base, phase0]
+
+- name: Read current fstab for rollback check
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/fstab
+  register: _current_fstab_raw
+  tags: [rollback, system, base, phase0]
+
+- name: Detect if fstab contains custom optimizations
+  ansible.builtin.set_fact:
+    base_fstab_optimized: "{{ 'noatime,commit=30' in (_current_fstab_raw.content | b64decode) }}"
+  tags: [rollback, system, base, phase0]
+
+- name: Refuse rollback without baseline when managed configs remain
+  ansible.builtin.fail:
+    msg: "Base baseline fact file is missing while custom configurations or optimizations still exist"
+  when:
+    - not base_fact_stat.stat.exists
+    - base_timesyncd_conf_stat.stat.exists or base_fstab_optimized | bool
+  tags: [rollback, system, base, phase0]
+
+- name: No managed base state to rollback
+  ansible.builtin.debug:
+    msg: "No base baseline and no custom configurations found, skipping rollback"
+  when:
+    - not base_fact_stat.stat.exists
+    - not base_timesyncd_conf_stat.stat.exists
+    - not base_fstab_optimized | bool
+  tags: [rollback, system, base, phase0]
+
+- name: Read base baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ base_fact_path }}"
+  register: base_fact_raw
+  when: base_fact_stat.stat.exists
+  tags: [rollback, system, base, phase0]
+
+- name: Parse base baseline for rollback
+  ansible.builtin.set_fact:
+    base_baseline: "{{ base_fact_raw.content | b64decode | from_json }}"
+  when: base_fact_stat.stat.exists
+  tags: [rollback, system, base, phase0]
+
+- name: Validate base baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - base_baseline.auroraops_managed | default(false) | bool
+      - base_baseline.version | default(0) | int >= 1
+      - base_baseline.pre_deploy_timezone_content is defined
+      - base_baseline.pre_deploy_locale_content is defined
+      - base_baseline.pre_deploy_resolv_content is defined
+      - base_baseline.pre_deploy_fstab_content is defined
+      - base_baseline.pre_deploy_udev_content is defined
+      - base_baseline.pre_deploy_services_state is defined
+      - base_baseline.pre_deploy_sources_content is defined
+    fail_msg: "Base baseline fact file contents are invalid for rollback"
+  when: base_fact_stat.stat.exists
+  tags: [rollback, system, base, phase0]
+
+# --- 1. Restore Timezone ---
+- name: Restore pre-deploy timezone file content
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_timezone_content }}"
+    dest: /etc/timezone
+    mode: "0644"
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_timezone_content | length) > 0
+  tags: [rollback, system, base, base_rollback_timezone, phase0]
+
+- name: Restore pre-deploy localtime symlink
+  become: true
+  ansible.builtin.file:
+    src: "{{ base_baseline.pre_deploy_timezone_link }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+  when:
+    - base_fact_stat.stat.exists
+    - base_baseline.pre_deploy_timezone_link is not none
+  tags: [rollback, system, base, base_rollback_timezone, phase0]
+
+# --- 2. Restore Locale ---
+- name: Restore pre-deploy locale content
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_locale_content }}"
+    dest: /etc/default/locale
+    mode: "0644"
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_locale_content | length) > 0
+  tags: [rollback, system, base, base_rollback_locale, phase0]
+
+- name: Regenerate locales
+  become: true
+  ansible.builtin.command: locale-gen
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_locale_content | length) > 0
+  tags: [rollback, system, base, base_rollback_locale, phase0]
+
+# --- 2.5. Restore APT Sources ---
+- name: Restore pre-deploy sources.list exactly
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_sources_content }}"
+    dest: /etc/apt/sources.list
+    mode: "0644"
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_sources_content | length) > 0
+  tags: [rollback, system, base, base_rollback_sources, phase0]
+
+# --- 3. Restore NTP Timesyncd Conf & Service ---
+- name: Remove NTP drop-in config
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d/99-ntp.conf
+    state: absent
+  register: _ntp_conf_remove
+  when: base_fact_stat.stat.exists
+  tags: [rollback, system, base, base_rollback_ntp, phase0]
+
+- name: Restore timesyncd service state (disabled/stopped if original state was none or inactive)
+  become: true
+  ansible.builtin.service:
+    name: systemd-timesyncd
+    enabled: "{{ base_baseline.pre_deploy_services_state.timesyncd.status | default('enabled') == 'enabled' }}"
+    state: "{{ 'started' if base_baseline.pre_deploy_services_state.timesyncd.state | default('running') == 'running' else 'stopped' }}"
+  when:
+    - base_fact_stat.stat.exists
+    - base_baseline.pre_deploy_services_state.timesyncd is not none
+    - auroraops_has_systemd | default(false) | bool
+  tags: [rollback, system, base, base_rollback_ntp, phase0]
+
+# --- 4. Restore DNS Resolver ---
+- name: Restore pre-deploy resolv.conf exactly
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_resolv_content }}"
+    dest: /etc/resolv.conf
+    mode: "0644"
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_resolv_content | length) > 0
+  tags: [rollback, system, base, base_rollback_dns, phase0]
+
+# --- 5. Unmask/Restore Non-Essential Services ---
+- name: Restore exim4 service
+  become: true
+  ansible.builtin.service:
+    name: exim4
+    masked: "{{ base_baseline.pre_deploy_services_state.exim4.status | default('enabled') == 'masked' }}"
+    enabled: "{{ base_baseline.pre_deploy_services_state.exim4.status | default('enabled') == 'enabled' }}"
+    state: "{{ 'started' if base_baseline.pre_deploy_services_state.exim4.state | default('running') == 'running' else 'stopped' }}"
+  ignore_errors: true
+  when:
+    - base_fact_stat.stat.exists
+    - base_baseline.pre_deploy_services_state.exim4 is not none
+  tags: [rollback, system, base, base_rollback_services, phase0]
+
+- name: Restore packagekit service
+  become: true
+  ansible.builtin.service:
+    name: packagekit
+    masked: "{{ base_baseline.pre_deploy_services_state.packagekit.status | default('enabled') == 'masked' }}"
+    enabled: "{{ base_baseline.pre_deploy_services_state.packagekit.status | default('enabled') == 'enabled' }}"
+    state: "{{ 'started' if base_baseline.pre_deploy_services_state.packagekit.state | default('running') == 'running' else 'stopped' }}"
+  ignore_errors: true
+  when:
+    - base_fact_stat.stat.exists
+    - base_baseline.pre_deploy_services_state.packagekit is not none
+  tags: [rollback, system, base, base_rollback_services, phase0]
+
+- name: Restore man-db.timer
+  become: true
+  ansible.builtin.service:
+    name: man-db.timer
+    masked: "{{ base_baseline.pre_deploy_services_state.man_db_timer.status | default('enabled') == 'masked' }}"
+    enabled: "{{ base_baseline.pre_deploy_services_state.man_db_timer.status | default('enabled') == 'enabled' }}"
+    state: "{{ 'started' if base_baseline.pre_deploy_services_state.man_db_timer.state | default('running') == 'running' else 'stopped' }}"
+  ignore_errors: true
+  when:
+    - base_fact_stat.stat.exists
+    - base_baseline.pre_deploy_services_state.man_db_timer is not none
+  tags: [rollback, system, base, base_rollback_services, phase0]
+
+# --- 6. Restore I/O Scheduler Rules (udev) ---
+- name: Remove I/O scheduler udev rules
+  become: true
+  ansible.builtin.file:
+    path: /etc/udev/rules.d/60-io-scheduler.rules
+    state: absent
+  register: _udev_rules_remove
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_udev_content | length) == 0
+  tags: [rollback, system, base, base_rollback_io, phase0]
+
+- name: Restore pre-deploy I/O scheduler udev rules
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_udev_content }}"
+    dest: /etc/udev/rules.d/60-io-scheduler.rules
+    mode: "0644"
+  register: _udev_rules_restore
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_udev_content | length) > 0
+  tags: [rollback, system, base, base_rollback_io, phase0]
+
+- name: Remove bfq load conf
+  become: true
+  ansible.builtin.file:
+    path: /etc/modules-load.d/bfq.conf
+    state: absent
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_bfq_content | length) == 0
+  tags: [rollback, system, base, base_rollback_io, phase0]
+
+- name: Restore pre-deploy bfq load conf
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_bfq_content }}"
+    dest: /etc/modules-load.d/bfq.conf
+    mode: "0644"
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_bfq_content | length) > 0
+  tags: [rollback, system, base, base_rollback_io, phase0]
+
+- name: Reload udev control rules after rollback
+  become: true
+  ansible.builtin.command: udevadm control --reload-rules
+  when:
+    - base_fact_stat.stat.exists
+    - (_udev_rules_remove.changed or (_udev_rules_restore is defined and _udev_rules_restore.changed))
+  changed_when: false
+  ignore_errors: true
+  tags: [rollback, system, base, base_rollback_io, phase0]
+
+- name: Trigger udev change action after rollback
+  become: true
+  ansible.builtin.command: udevadm trigger --type=devices --action=change
+  when:
+    - base_fact_stat.stat.exists
+    - (_udev_rules_remove.changed or (_udev_rules_restore is defined and _udev_rules_restore.changed))
+  changed_when: false
+  ignore_errors: true
+  tags: [rollback, system, base, base_rollback_io, phase0]
+
+# --- 7. Restore Fstab & Remount ---
+- name: Restore pre-deploy fstab content exactly
+  become: true
+  ansible.builtin.copy:
+    content: "{{ base_baseline.pre_deploy_fstab_content }}"
+    dest: /etc/fstab
+    mode: "0644"
+  register: _fstab_restore
+  when:
+    - base_fact_stat.stat.exists
+    - (base_baseline.pre_deploy_fstab_content | length) > 0
+  tags: [rollback, system, base, base_rollback_fstab, phase0]
+
+- name: Remount root partition to apply rolled back options
+  become: true
+  ansible.builtin.command: mount -o remount /
+  when:
+    - base_fact_stat.stat.exists
+    - _fstab_restore.changed
+  tags: [rollback, system, base, base_rollback_fstab, phase0]
+
+# --- 8. Clean Up Verification Script ---
+- name: Remove verification script from target host
+  become: true
+  ansible.builtin.file:
+    path: /root/AuroraOps/scripts/verify_phase0.py
+    state: absent
+  tags: [rollback, system, base, base_rollback_cleanup, phase0]
+
+# --- 9. Clean Up Baseline Fact File ---
+- name: Remove base baseline fact file
+  become: true
+  ansible.builtin.file:
+    path: "{{ base_fact_path }}"
+    state: absent
+  when: base_fact_stat.stat.exists
+  tags: [rollback, system, base, base_rollback_cleanup, phase0]

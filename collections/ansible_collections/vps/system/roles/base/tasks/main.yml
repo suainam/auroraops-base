@@ -1,0 +1,39 @@
+# 启用控制变量: auroraops_roles['system']['base'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role base is disabled, skipping"
+  when: not (auroraops_roles['system']['base'] | default(true) | bool)
+  tags: [always, deploy, system, base]
+
+- name: 角色已启用，执行基础配置任务
+  ansible.builtin.debug:
+    msg: "Executing base role tasks"
+  when: auroraops_roles['system']['base'] | default(true) | bool
+  tags: [always, deploy, system, base]
+
+# ── 全局环境探测 (供所有角色使用) ──────────────────────────
+# 修复：直接使用 gather_facts 收集的 ansible_service_mgr，彻底避免
+# Mitogen --check 模式下 register 产生 UnifiedTaskResult 占位对象的 bug。
+# 该对象不实现 __contains__，导致 Jinja2 的 `in` 求值抛出 "not iterable"。
+# ansible_service_mgr 在 check/deploy 两种模式下均可靠可用。
+- name: 设置全局 auroraops_has_systemd fact
+  ansible.builtin.set_fact:
+    auroraops_has_systemd: "{{ (ansible_service_mgr | default('unknown')) == 'systemd' }}"
+    cacheable: true
+  when: auroraops_roles['system']['base'] | default(true) | bool
+  tags: [always, deploy, system, base, phase0]
+# ──────────────────────────────────────────────────────────
+
+- name: Run base preflight
+  ansible.builtin.import_tasks: preflight.yml
+  when: auroraops_roles['system']['base'] | default(true) | bool
+  tags: [deploy, system, base, phase0]
+
+- name: Apply managed base changes
+  ansible.builtin.import_tasks: apply.yml
+  when:
+    - auroraops_roles['system']['base'] | default(true) | bool
+    - not ansible_check_mode
+  tags: [deploy, system, base, phase0]

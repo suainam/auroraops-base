@@ -1,0 +1,7 @@
+# roles/system-tuning/zram/defaults/main.yml
+---
+zram_algo: lzo-rle     # 压缩算法：lzo-rle 兼容性最好，lz4 更快，zstd 压缩率更高
+zram_percent: 25       # 占用物理内存百分比，根据服务器内存大小调整
+zram_priority: 100     # 优先级，高于 swapfile
+zram_fact_path: /etc/ansible/facts.d/zram.fact
+zram_auto_disable_ram_mb_threshold: 16384

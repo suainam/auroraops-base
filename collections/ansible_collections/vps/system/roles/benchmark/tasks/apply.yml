@@ -1,0 +1,111 @@
+---
+- name: Ensure facts.d directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+
+- name: Persist benchmark rollback baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ benchmark_baseline_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": True,
+          "version": 1,
+          "script_path": benchmark_script_path,
+          "fact_path": benchmark_fact_path,
+          "pre_deploy_script_exists": benchmark_preflight.script_exists | bool,
+          "pre_deploy_script_content": benchmark_preflight.script_content,
+          "pre_deploy_fact_exists": benchmark_preflight.fact_exists | bool,
+          "pre_deploy_fact_content": benchmark_preflight.fact_content,
+          "pre_deploy_report_exists": benchmark_preflight.report_exists | bool,
+          "pre_deploy_report_content": benchmark_preflight.report_content,
+          "pre_deploy_host_vars_existed": benchmark_preflight.host_vars_existed | bool
+        } | to_nice_json
+      }}
+  when: not (benchmark_preflight.baseline_exists | bool)
+
+- name: Install benchmark collection script
+  become: true
+  ansible.builtin.copy:
+    src: collect_metrics.sh
+    dest: "{{ benchmark_script_path }}"
+    mode: "0755"
+
+- name: Run benchmark collection
+  become: true
+  ansible.builtin.command: "{{ benchmark_script_path }}"
+  environment:
+    AURORAOPS_BENCHMARK_MODE: "{{ benchmark_mode }}"
+  register: benchmark_output
+  changed_when: true
+  async: "{{ benchmark_async_timeout }}"
+  poll: "{{ benchmark_async_poll }}"
+
+
+- name: Show benchmark summary
+  ansible.builtin.debug:
+    msg: "{{ benchmark_output.stdout_lines | default(['No output']) }}"
+  when: benchmark_output is defined
+
+- name: Reload ansible local facts
+  ansible.builtin.setup:
+    filter: ansible_local
+
+- name: Assert performance fact is available
+  ansible.builtin.assert:
+    that:
+      - ansible_local.performance is defined
+      - ansible_local.performance.geo is defined
+      - ansible_local.performance.network is defined
+      - ansible_local.performance.hardware is defined
+    fail_msg: "Performance fact not generated correctly. Check {{ benchmark_fact_path }}"
+    success_msg: >-
+      Benchmark OK: Country={{ ansible_local.performance.geo.country }},
+      Latency={{ ansible_local.performance.network.latency_ms }}ms,
+      IO={{ ansible_local.performance.hardware.io_speed_mbps }}MB/s,
+      Score={{ ansible_local.performance.hardware.score }}
+
+- name: Ensure local host_vars directory exists
+  delegate_to: localhost
+  become: false
+  ansible.builtin.file:
+    path: "{{ benchmark_host_vars_dir_path }}"
+    state: directory
+    mode: "0755"
+  vars:
+    ansible_become: false
+  when:
+    - benchmark_sync_to_local | bool
+    - ansible_local.performance is defined
+
+- name: Sync performance data to local host_vars
+  delegate_to: localhost
+  become: false
+  ansible.builtin.blockinfile:
+    path: "{{ benchmark_host_vars_path }}"
+    block: "{{ lookup('template', 'performance.j2') }}"
+    marker: "{{ benchmark_hostvars_marker }}"
+    create: true
+    mode: "0644"
+  register: benchmark_sync_result
+  vars:
+    ansible_become: false
+  when:
+    - benchmark_sync_to_local | bool
+    - ansible_local.performance is defined
+
+- name: Show benchmark sync status
+  ansible.builtin.debug:
+    msg: >-
+      Performance data synced to {{ benchmark_host_vars_path }}
+      (Status: {{ 'CHANGED' if benchmark_sync_result.changed else 'UNCHANGED' }})
+  when:
+    - benchmark_sync_to_local | bool
+    - ansible_local.performance is defined

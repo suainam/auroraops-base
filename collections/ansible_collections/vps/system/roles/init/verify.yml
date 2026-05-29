@@ -1,0 +1,25 @@
+---
+- name: 验证基础工具是否安装
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [verify, phase0, system, init, install_tools]
+
+- name: 检查 curl 是否安装
+  ansible.builtin.assert:
+    that:
+      - "'curl' in ansible_facts.packages"
+    success_msg: "✅ curl 已安装"
+    fail_msg: "❌ curl 未安装"
+  tags: [verify, phase0, system, init, install_tools]
+
+- name: 检查 git 是否安装
+  ansible.builtin.assert:
+    that:
+      - "'git' in ansible_facts.packages"
+    success_msg: "✅ git 已安装"
+    fail_msg: "❌ git 未安装"
+  tags: [verify, phase0, system, init, install_tools]
+
+- name: 检查 Ansible 是否可用
+  ansible.builtin.ping:
+  tags: [verify, phase0, system, init, test_ansible]

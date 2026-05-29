@@ -1,0 +1,118 @@
+  - name: Check if ZeroTier is already installed
+    command: which zerotier-cli
+    register: zerotier_check
+    changed_when: false
+    failed_when: false
+
+    tags:
+      - phase0
+
+  - name: Skip ZeroTier installation if already installed
+    debug:
+      msg: "ZeroTier is already installed (version {{ zerotier_check.stdout }}), skipping installation."
+    when: zerotier_check.rc == 0
+
+    tags:
+      - phase0
+
+  - name: ZeroTier Installation Block
+    block:
+      - name: Temporarily comment out cdrom apt sources
+        become: true
+        ansible.builtin.replace:
+          path: /etc/apt/sources.list
+          regexp: '^([^#]*deb\s+cdrom:.*)$'
+          replace: '# \1'
+        register: cdrom_commented
+        tags: [phase0]
+
+      - name: Ensure gnupg is installed
+        become: yes
+        ansible.builtin.shell: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get install -y gnupg
+        args:
+          executable: /bin/bash
+        tags: [phase0]
+
+      - name: Download ZeroTier GPG key (via jsDelivr CDN - direct)
+        ansible.builtin.get_url:
+          url: "https://cdn.jsdelivr.net/gh/zerotier/ZeroTierOne@master/doc/contact%40zerotier.com.gpg"
+          dest: "/tmp/zerotier-key.asc"
+          mode: '0644'
+          force: true
+          use_proxy: no
+        register: jsd_download
+        ignore_errors: true
+        tags: [phase0]
+
+      - name: Download ZeroTier GPG key (via GitHub - proxy fallback)
+        ansible.builtin.get_url:
+          url: "https://raw.githubusercontent.com/zerotier/ZeroTierOne/master/doc/contact%40zerotier.com.gpg"
+          dest: "/tmp/zerotier-key.asc"
+          mode: '0644'
+          force: true
+          use_proxy: yes
+        environment: "{{ zerotier_environment_proxy }}"
+        when: jsd_download is failed
+        tags: [phase0]
+
+      - name: Install ZeroTier GPG keyring
+        become: yes
+        ansible.builtin.shell: |
+          cat /tmp/zerotier-key.asc | gpg --dearmor -o /etc/apt/keyrings/zerotier.gpg --yes
+        tags: [phase0]
+
+      - name: Remove old ZeroTier repository (if exists)
+        become: yes
+        ansible.builtin.file:
+          path: /etc/apt/sources.list.d/zerotier.list
+          state: absent
+        tags: [phase0]
+
+      - name: Add ZeroTier repository
+        become: yes
+        ansible.builtin.apt_repository:
+          repo: "deb [signed-by=/etc/apt/keyrings/zerotier.gpg] http://download.zerotier.com/debian/{{ ansible_distribution_release }} {{ ansible_distribution_release }} main"
+          filename: zerotier
+          state: present
+        tags: [phase0]
+
+      - name: Install ZeroTier
+        become: yes
+        ansible.builtin.shell: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y zerotier-one
+        args:
+          executable: /bin/bash
+        tags: [phase0]
+
+      - name: Ensure ZeroTier service is started and enabled
+        become: yes
+        ansible.builtin.service:
+          name: zerotier-one
+          state: started
+          enabled: true
+        tags: [phase0]
+
+      - name: Allow ZeroTier port via UFW
+        become: true
+        community.general.ufw:
+          rule: allow
+          port: "{{ zerotier_port | string }}"
+          proto: udp
+        when: ufw_stat.stat.exists | default(false) | bool
+        tags: [phase0]
+    always:
+      - name: Restore cdrom apt sources
+        become: true
+        ansible.builtin.replace:
+          path: /etc/apt/sources.list
+          regexp: '^#\s*(deb\s+cdrom:.*)$'
+          replace: '\1'
+        when: cdrom_commented is defined and cdrom_commented.changed
+        tags: [phase0]
+    when: zerotier_check.rc != 0
+    tags: [phase0]
+

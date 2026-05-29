@@ -1,0 +1,81 @@
+---
+- name: Check existing systemd_priority baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ systemd_priority_fact_path }}"
+  register: systemd_priority_fact_stat
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Read existing systemd_priority baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ systemd_priority_fact_path }}"
+  register: systemd_priority_fact_raw
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Parse existing systemd_priority baseline
+  ansible.builtin.set_fact:
+    systemd_priority_baseline: "{{ systemd_priority_fact_raw.content | b64decode | from_json }}"
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Validate systemd_priority baseline metadata
+  ansible.builtin.assert:
+    that:
+      - systemd_priority_baseline.auroraops_managed | default(false) | bool
+      - systemd_priority_baseline.version | default(0) | int >= 1
+      - systemd_priority_baseline.managed_services is mapping
+    fail_msg: "Existing systemd_priority baseline is invalid"
+  when: systemd_priority_fact_stat.stat.exists
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Check current systemd priority override state
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item.name }}.service.d"
+  register: systemd_priority_managed_dir_stats
+  loop: "{{ systemd_priority_services }}"
+  changed_when: false
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Check current systemd priority override file state
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item.name }}.service.d/priority.conf"
+  register: systemd_priority_managed_file_stats
+  loop: "{{ systemd_priority_services }}"
+  changed_when: false
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Read current systemd priority override file
+  become: true
+  ansible.builtin.slurp:
+    path: "/etc/systemd/system/{{ item.item.name }}.service.d/priority.conf"
+  register: systemd_priority_managed_file_raw
+  loop: "{{ systemd_priority_managed_file_stats.results }}"
+  when: item.stat.exists
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Build systemd_priority managed service map
+  ansible.builtin.set_fact:
+    systemd_priority_managed_services: "{{ systemd_priority_managed_services | default({}) | combine({ item.name: {
+      'managed_dir': '/etc/systemd/system/' ~ item.name ~ '.service.d',
+      'managed_file': '/etc/systemd/system/' ~ item.name ~ '.service.d/priority.conf',
+      'pre_deploy_dir_exists': (systemd_priority_managed_dir_stats.results | selectattr('item.name', 'equalto', item.name) | map(attribute='stat.exists') | first | default(false)),
+      'pre_deploy_dir_mode': (systemd_priority_managed_dir_stats.results | selectattr('item.name', 'equalto', item.name) | map(attribute='stat.mode') | first | default('0755')),
+      'pre_deploy_file_exists': (systemd_priority_managed_file_stats.results | selectattr('item.name', 'equalto', item.name) | map(attribute='stat.exists') | first | default(false)),
+      'pre_deploy_content': ((systemd_priority_managed_file_raw.results | selectattr('item.item.name', 'equalto', item.name) | map(attribute='content') | first | default('')) | b64decode) if ((systemd_priority_managed_file_stats.results | selectattr('item.name', 'equalto', item.name) | map(attribute='stat.exists') | first | default(false))) else '',
+      'oom_score_adj': item.oom_score_adj,
+      'nice': item.nice
+    }}, recursive=True) }}"
+  loop: "{{ systemd_priority_services }}"
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Ensure systemd_priority managed service map is present
+  ansible.builtin.assert:
+    that:
+      - systemd_priority_managed_services is mapping
+      - systemd_priority_managed_services | length > 0
+    fail_msg: "systemd_priority managed service map is empty"
+  tags: [deploy, system, systemd_priority, phase0]

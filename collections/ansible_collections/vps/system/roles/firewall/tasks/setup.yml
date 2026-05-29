@@ -1,0 +1,155 @@
+  - name: Stop and disable nftables
+    become: yes
+    ansible.builtin.service:
+      name: nftables
+      state: stopped
+      enabled: false
+    ignore_errors: true
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Flush nftables rules
+    become: yes
+    ansible.builtin.command:
+      cmd: nft flush ruleset
+    changed_when: true
+    ignore_errors: true
+    notify: Restart docker
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Read apt sources list for UFW install
+    become: yes
+    ansible.builtin.slurp:
+      path: /etc/apt/sources.list
+    register: firewall_apt_sources_raw
+    when: not firewall_ufw_pkg_installed | bool
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Write sanitized apt sources list for UFW install
+    become: yes
+    ansible.builtin.copy:
+      dest: /tmp/auroraops-firewall-sources.list
+      mode: "0644"
+      content: "{{ (firewall_apt_sources_raw.content | b64decode) | regex_replace('(?m)^deb cdrom:.*\\n?', '') }}"
+    when: not firewall_ufw_pkg_installed | bool
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Refresh apt package lists for UFW install
+    become: yes
+    ansible.builtin.command:
+      cmd: apt-get -o Dir::Etc::sourcelist=/tmp/auroraops-firewall-sources.list -o Dir::Etc::sourceparts=- update
+    when: not firewall_ufw_pkg_installed | bool
+    changed_when: false
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Install UFW
+    become: yes
+    ansible.builtin.command:
+      cmd: apt-get -o Dir::Etc::sourcelist=/tmp/auroraops-firewall-sources.list -o Dir::Etc::sourceparts=- install -y --no-install-recommends ufw
+    environment:
+      DEBIAN_FRONTEND: noninteractive
+    when: not firewall_ufw_pkg_installed | bool
+    register: firewall_ufw_install_result
+    changed_when: firewall_ufw_install_result.rc == 0
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Configure UFW logrotate
+    ansible.builtin.include_role:
+      name: vps.system.logrotate
+    vars:
+      logrotate_configs_to_deploy:
+        - name: ufw
+          log_path: /var/log/ufw.log
+          rotate_count: 7
+          interval: daily
+          compress: true
+          delaycompress: true
+          missingok: true
+          notifempty: true
+          postrotate_command: "[ -x /usr/lib/rsyslog/rsyslog-rotate ] && /usr/lib/rsyslog/rsyslog-rotate\n            \ || true"
+    tags: [deploy, system, firewall, logrotate, phase1, firewall_apply]
+
+  - name: Enable IPv4 and IPv6 forwarding
+    become: yes
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: '1'
+      sysctl_set: true
+      state: present
+      reload: true
+    loop: "{{ firewall_forward_sysctls }}"
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Configure UFW default policies
+    become: yes
+    community.general.ufw:
+      direction: "{{ item.direction }}"
+      policy: "{{ item.policy }}"
+    loop:
+      - {direction: 'incoming', policy: 'deny'}
+      - {direction: 'outgoing', policy: 'allow'}
+      - {direction: 'routed', policy: 'allow'}
+    when: >
+      (item.direction == 'incoming' and 'Default: deny (incoming)' not in firewall_ufw_status_verbose.stdout)
+      or
+      (item.direction == 'outgoing' and 'Default: allow (outgoing)' not in firewall_ufw_status_verbose.stdout)
+      or
+      (item.direction == 'routed' and 'Default: allow (routed)' not in firewall_ufw_status_verbose.stdout)
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Update UFW default configuration
+    become: yes
+    ansible.builtin.lineinfile:
+      path: /etc/default/ufw
+      regexp: "{{ item.regexp }}"
+      line: "{{ item.line }}"
+    loop:
+      - {regexp: '^DEFAULT_FORWARD_POLICY=', line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'}
+      - {regexp: '^IPV6=', line: 'IPV6=yes'}
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Configure UFW additive NAT and Mangle rules via after.init
+    become: yes
+    ansible.builtin.template:
+      src: after.init.j2
+      dest: /etc/ufw/after.init
+      mode: '0755'
+      owner: root
+      group: root
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Ensure destructive NAT/Mangle blocks are removed from before.rules
+    become: yes
+    ansible.builtin.blockinfile:
+      path: /etc/ufw/before.rules
+      marker: "# {mark} ANSIBLE MANAGED BLOCK: NAT AND FORWARDING"
+      state: absent
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Ensure destructive NAT6 blocks are removed from before6.rules
+    become: yes
+    ansible.builtin.blockinfile:
+      path: /etc/ufw/before6.rules
+      marker: "# {mark} ANSIBLE MANAGED BLOCK: NAT6"
+      state: absent
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Ensure configured SSH port remains allowed before enabling UFW
+    become: yes
+    community.general.ufw:
+      rule: allow
+      port: "{{ ssh_port | string }}"
+      proto: tcp
+    notify: Reload ufw
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  - name: Enable UFW
+    become: yes
+    community.general.ufw:
+      state: enabled
+    tags: [deploy, system, firewall, phase1, firewall_apply]

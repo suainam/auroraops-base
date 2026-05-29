@@ -1,0 +1,43 @@
+---
+- name: Ensure facts.d directory exists for zerotier
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+
+- name: Persist zerotier rollback baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ zerotier_fact_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": True,
+          "version": 1,
+          "package_name": zerotier_package_name,
+          "service_name": zerotier_service_name,
+          "pre_deploy_package_installed": zerotier_preflight.package_installed | bool,
+          "pre_deploy_service_enabled": zerotier_preflight.service_enabled | bool,
+          "pre_deploy_service_running": zerotier_preflight.service_running | bool,
+          "pre_deploy_repo_exists": zerotier_preflight.repo_exists | bool,
+          "pre_deploy_keyring_exists": zerotier_preflight.keyring_exists | bool,
+          "pre_deploy_moon_json_exists": zerotier_preflight.moon_json_exists | bool,
+          "pre_deploy_moons_dir_exists": zerotier_preflight.moons_dir_exists | bool
+        } | to_nice_json
+      }}
+  when: not (zerotier_preflight.baseline_exists | bool)
+
+- name: Include zerotier installation tasks
+  ansible.builtin.import_tasks: install.yml
+
+- name: Include zerotier join tasks
+  ansible.builtin.import_tasks: join.yml
+  when: zerotier_network_id | length > 0
+
+- name: Include zerotier moon tasks
+  ansible.builtin.import_tasks: moon.yml
+  when: zerotier_enable_moon | bool

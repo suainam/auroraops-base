@@ -1,0 +1,9 @@
+journald_fact_path: /etc/ansible/facts.d/journald.fact
+journald_managed_dir: /etc/systemd/journald.conf.d
+journald_managed_file: /etc/systemd/journald.conf.d/override.conf
+journald_system_max_use: 10M
+journald_rate_limit_interval: 30s
+journald_rate_limit_burst: 1000
+journald_storage: persistent
+journald_sync_interval: 5m
+journald_forward_to_syslog: "no"

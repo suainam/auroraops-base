@@ -1,0 +1,28 @@
+---
+# tasks file for vps.system.systemd_priority
+# 启用控制变量: auroraops_roles['system']['systemd_priority'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role systemd_priority is disabled, skipping"
+  when: not (auroraops_roles['system']['systemd_priority'] | default(true) | bool)
+  tags: [always, deploy, verify, rollback, system, systemd_priority]
+
+- name: 角色已启用，执行 Systemd Priority 任务
+  ansible.builtin.debug:
+    msg: "Executing systemd_priority role tasks"
+  when: auroraops_roles['system']['systemd_priority'] | default(true) | bool
+  tags: [always, deploy, verify, rollback, system, systemd_priority]
+
+- name: Run systemd_priority preflight
+  ansible.builtin.import_tasks: preflight.yml
+  when: auroraops_roles['system']['systemd_priority'] | default(true) | bool
+  tags: [deploy, system, systemd_priority, phase0]
+
+- name: Apply managed systemd_priority changes
+  ansible.builtin.import_tasks: apply.yml
+  when:
+    - auroraops_roles['system']['systemd_priority'] | default(true) | bool
+    - not ansible_check_mode
+  tags: [deploy, system, systemd_priority, phase0]

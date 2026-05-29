@@ -1,0 +1,268 @@
+- name: Ensure facts.d directory exists for init baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, init, phase0]
+
+- name: Recover interrupted dpkg state before init package operations
+  become: true
+  ansible.builtin.shell: |
+    echo "[init] dpkg --configure -a start"
+    timeout 20m dpkg --configure -a
+    echo "[init] dpkg --configure -a done"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  tags: [deploy, system, init, phase0]
+
+- name: Persist pre-deploy init baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ init_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "distribution": ansible_distribution,
+          "distribution_release": ansible_distribution_release,
+          "selected_apt_strategy": init_selected_apt_strategy | default('n/a'),
+          "selected_apt_mirror_url": init_selected_apt_mirror_url | default(init_effective_apt_mirror_url),
+          "selected_apt_security_url": init_selected_apt_security_url | default(init_effective_apt_security_url),
+          "pre_deploy_sources_exists": init_sources_stat.stat.exists | default(false),
+          "pre_deploy_sources_content": init_sources_content | default(''),
+          "pre_deploy_has_cdrom_source": init_has_cdrom_source | default(false),
+          "pre_deploy_resolv_exists": init_resolv_stat.stat.exists | default(false),
+          "pre_deploy_resolv_content": init_resolv_content | default(''),
+          "pre_deploy_has_nameserver": init_has_nameserver | default(false),
+          "preinstalled_packages": init_preinstalled_packages
+        } | to_nice_json
+      }}
+  when: not init_fact_stat.stat.exists
+  tags: [deploy, system, init, phase0]
+
+- name: Upgrade legacy init baseline with resolver metadata
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ init_fact_path }}"
+    mode: "0644"
+    content: |
+      {{ init_baseline | to_nice_json }}
+  when:
+    - init_fact_stat.stat.exists
+    - init_baseline.pre_deploy_resolv_exists is defined
+    - init_baseline.pre_deploy_resolv_content is defined
+    - init_baseline.pre_deploy_has_nameserver is defined
+  tags: [deploy, system, init, phase0]
+
+- name: Bootstrap minimal resolv.conf when nameserver is missing
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    mode: "0644"
+    content: |
+      # Bootstrap resolver managed by init
+      {% for server in init_bootstrap_nameservers %}
+      nameserver {{ server }}
+      {% endfor %}
+  when: not (init_has_nameserver | default(false))
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Re-probe configured apt mirror DNS after resolver bootstrap
+  ansible.builtin.command: "getent ahosts {{ item }}"
+  loop:
+    - "{{ init_primary_apt_host }}"
+    - "{{ init_security_apt_host }}"
+  register: init_post_dns_checks
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Debian'
+    - not (init_apt_mirror_dns_ok | default(false) | bool)
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Re-probe fallback apt mirror DNS after resolver bootstrap
+  ansible.builtin.command: "getent ahosts {{ item }}"
+  loop:
+    - "{{ init_fallback_primary_apt_host }}"
+    - "{{ init_fallback_security_apt_host }}"
+  register: init_post_fallback_dns_checks
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Debian'
+    - not (init_fallback_apt_dns_ok | default(false) | bool)
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Refresh apt source strategy after resolver bootstrap
+  ansible.builtin.set_fact:
+    init_apt_mirror_dns_ok: >-
+      {{
+        init_apt_mirror_dns_ok | default(false) or
+        (
+          (
+            init_post_dns_checks.results | default([])
+            | rejectattr('rc', 'equalto', 0)
+            | list
+            | length
+          ) == 0
+        )
+      }}
+    init_fallback_apt_dns_ok: >-
+      {{
+        init_fallback_apt_dns_ok | default(false) or
+        (
+          (
+            init_post_fallback_dns_checks.results | default([])
+            | rejectattr('rc', 'equalto', 0)
+            | list
+            | length
+          ) == 0
+        )
+      }}
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Probe configured apt mirror latency after resolver bootstrap
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; host='{{ init_primary_apt_host }}'; port={{ 443 if (init_effective_apt_mirror_url is match('^https://')) else 80 }}; start=time.time(); sock=socket.create_connection((host, port), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: init_post_primary_ping
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Debian'
+    - init_apt_mirror_dns_ok | default(false) | bool
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Probe fallback apt mirror latency after resolver bootstrap
+  ansible.builtin.shell: |
+    python3 -c "import socket, time; host='{{ init_fallback_primary_apt_host }}'; port={{ 443 if (init_fallback_apt_mirror_url is match('^https://')) else 80 }}; start=time.time(); sock=socket.create_connection((host, port), 2); sock.close(); print(round((time.time() - start) * 1000, 3))"
+  register: init_post_fallback_ping
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Debian'
+    - init_fallback_apt_dns_ok | default(false) | bool
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Keep preferred source ordering after resolver bootstrap
+  ansible.builtin.set_fact:
+    init_selected_apt_mirror_url: "{{ init_effective_apt_mirror_url }}"
+    init_selected_apt_security_url: "{{ init_effective_apt_security_url }}"
+    init_selected_apt_strategy: preferred_tsinghua
+  when:
+    - ansible_distribution == 'Debian'
+    - init_apt_mirror_dns_ok | default(false) | bool
+    - init_fallback_apt_dns_ok | default(false) | bool
+    - init_post_primary_ping.rc | default(1) == 0
+    - init_post_fallback_ping.rc | default(1) == 0
+    - (init_post_primary_ping.stdout | default('')) | length > 0
+    - (init_post_fallback_ping.stdout | default('')) | length > 0
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Recompute apt mirror selection after resolver bootstrap
+  ansible.builtin.set_fact:
+    init_selected_apt_mirror_url: >-
+      {{
+        init_effective_apt_mirror_url
+        if (init_apt_mirror_dns_ok | bool)
+        else init_fallback_apt_mirror_url
+      }}
+    init_selected_apt_security_url: >-
+      {{
+        init_effective_apt_security_url
+        if (init_apt_mirror_dns_ok | bool)
+        else init_fallback_apt_security_url
+      }}
+    init_selected_apt_strategy: >-
+      {{
+        'preferred_tsinghua'
+        if (init_apt_mirror_dns_ok | bool)
+        else ('fallback_' ~ init_fallback_apt_mirror_provider if (init_fallback_apt_dns_ok | default(false) | bool) else 'preferred_unreachable')
+      }}
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, init_bootstrap_dns, phase0]
+
+- name: Refuse init apply when neither configured nor fallback apt sources resolve
+  ansible.builtin.fail:
+    msg: >-
+      Neither configured apt source {{ init_effective_apt_mirror_url }} nor fallback source
+      {{ init_fallback_apt_mirror_url }} is resolvable from target host.
+  when:
+    - ansible_distribution == 'Debian'
+    - not (init_apt_mirror_dns_ok | default(false) | bool)
+    - not (init_fallback_apt_dns_ok | default(false) | bool)
+  tags: [deploy, system, init, phase0]
+
+- name: Manage Debian sources.list from template
+  become: true
+  ansible.builtin.template:
+    src: sources.list.j2
+    dest: /etc/apt/sources.list
+    backup: true
+    mode: "0644"
+  when: ansible_distribution == 'Debian'
+  tags: [deploy, system, init, init_manage_sources, phase0]
+
+- name: Disable Linux Mint cdrom-only sources.list
+  become: true
+  ansible.builtin.copy:
+    content: |
+      # deb cdrom:[Linux Mint 22.1 _Xia_ - Release amd64 20250110]/ noble contrib main
+      # This system was installed using small removable media
+      # (e.g. netinst, live or single CD). The matching "deb cdrom"
+      # entries were disabled at the end of the installation process.
+      # For information about how to configure apt package sources,
+      # see the sources.list(5) manual.
+    dest: /etc/apt/sources.list
+    mode: "0644"
+  when: ansible_distribution == 'Linux Mint'
+  tags: [deploy, system, init, init_manage_sources, phase0]
+
+- name: Update apt package index
+  become: true
+  ansible.builtin.command: apt-get update
+  register: init_apt_update
+  changed_when: false
+  tags: [deploy, system, init, init_update, phase0]
+
+- name: Dist-upgrade system packages
+  become: true
+  ansible.builtin.command: apt-get dist-upgrade -y
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: init_run_dist_upgrade | bool
+  tags: [deploy, system, init, init_upgrade, phase0]
+
+- name: Install base init core packages
+  become: true
+  ansible.builtin.command: >-
+    apt-get install -y
+    curl git vim tree rsync htop net-tools lsof
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: init_core_pkg_install
+  changed_when: >-
+    ('0 newly installed' not in init_core_pkg_install.stdout) or
+    ('0 upgraded' not in init_core_pkg_install.stdout)
+  tags: [deploy, system, init, init_install_tools, phase0]
+
+- name: Install base init Python and support packages
+  become: true
+  ansible.builtin.command: >-
+    apt-get install -y
+    python3 python3-apt python3-pip dnsutils bash-completion
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: init_support_pkg_install
+  changed_when: >-
+    ('0 newly installed' not in init_support_pkg_install.stdout) or
+    ('0 upgraded' not in init_support_pkg_install.stdout)
+  tags: [deploy, system, init, init_install_tools, phase0]
+
+- name: Test Ansible control connection after init
+  ansible.builtin.ping:
+  tags: [deploy, system, init, init_test_ansible, phase0]

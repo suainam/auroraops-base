@@ -1,0 +1,16 @@
+- name: 验证 limits.conf 配置
+  become: yes
+  ansible.builtin.command: grep nofile /etc/security/limits.d/99-nofile.conf
+  register: limits_conf
+  changed_when: false
+  tags: [limits]
+
+- name: 检查 nofile=65535
+  assert:
+    that:
+      - "'* soft nofile 65535' in limits_conf.stdout"
+      - "'* hard nofile 65535' in limits_conf.stdout"
+    fail_msg: "❌ limits.conf 未正确配置"
+    success_msg: "✅ limits.conf 配置正确"
+  tags: [limits]
+

@@ -1,0 +1,37 @@
+---
+unattended_upgrades_fact_path: /etc/ansible/facts.d/unattended_upgrades.fact
+unattended_upgrades_config_path: /etc/apt/apt.conf.d/50unattended-upgrades
+unattended_upgrades_auto_upgrades_path: /etc/apt/apt.conf.d/20auto-upgrades
+unattended_upgrades_package_name: unattended-upgrades
+unattended_upgrades_listchanges_package_name: apt-listchanges
+unattended_upgrades_service_name: unattended-upgrades
+
+# 是否启用自动更新
+unattended_upgrades_enabled: true
+
+# 自动更新的目标发行版源（支持通配符）
+# 默认启用安全更新 (origin=Debian, codename=${distro_codename}-security)
+unattended_upgrades_origins_patterns:
+  - "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+  - "origin=Debian,codename=${distro_codename}-updates"
+
+# 黑名单：不自动更新的包
+unattended_upgrades_blacklist: []
+# - nginx
+# - docker-ce
+
+# 是否自动移除未使用的依赖 (autoremove)
+unattended_upgrades_autoremove: true
+
+# 是否允许自动重启 (如果不允许，会生成 /var/run/reboot-required 文件)
+unattended_upgrades_automatic_reboot: false
+# 重启时间 (如果启用了自动重启)
+unattended_upgrades_automatic_reboot_time: "04:00"
+
+# 邮件通知 (需要系统已配置 mail 命令，如 postfix/exim/msmtp)
+# 本项目默认未配置系统级 MTA，故默认不开启，或配置为只有错误时发送
+unattended_upgrades_mail: ""
+unattended_upgrades_mail_only_on_error: true
+
+# 保留几天内的下载包
+unattended_upgrades_keep_cache_days: 7

@@ -1,0 +1,35 @@
+---
+# Python 版本，默认为 3
+python_version: "3"
+
+# Canonical 虚拟环境路径
+system_python_venv_path: "/opt/aurora_venv"
+python_environment_fact_path: /etc/ansible/facts.d/python_environment.fact
+python_environment_pip_conf_path: /etc/pip.conf
+
+# 搜索已有的 Bootstrap 环境路径 (仅用于只读探测/诊断)
+bootstrap_venv_search_paths:
+  - "/root/.local/pipx/venvs/ansible-core"
+  - "/root/AuroraOps/venv"
+
+# 历史兼容变量；当前 stateful 流程不再自动接管外部 venv
+python_auto_link_existing_venv: true
+
+# 基础需要安装的基础 Python 库 (用于打通不同角色的依赖)
+python_base_packages:
+  - pip
+  - setuptools
+  - wheel
+  - cryptography
+  - requests
+  - jmespath
+  - certbot
+  - certbot-dns-cloudflare
+  - redis
+
+# pip 源采用防御式优先级：
+# 1. 清华 PyPI
+# 2. 官方 PyPI
+# 3. RTT 只做观测，不再推翻前两级优先级
+python_preferred_pip_index_url: "https://pypi.tuna.tsinghua.edu.cn/simple"
+python_fallback_pip_index_url: "https://pypi.org/simple"

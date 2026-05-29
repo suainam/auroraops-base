@@ -1,0 +1,7 @@
+---
+# 变量将从 vault.yml 中获取，这里不再定义 admin_user 和 admin_password
+user_management_fact_path: /etc/ansible/facts.d/user_management.fact
+user_management_admin_home: "/home/{{ admin_user }}"
+user_management_groups:
+  - sudo
+user_management_shell: /bin/zsh

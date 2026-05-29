@@ -1,0 +1,45 @@
+- name: Ensure facts.d directory exists for firewall baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, firewall, phase1]
+
+- name: Persist pre-deploy firewall baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ firewall_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": firewall_baseline_version,
+          "ssh_port": ssh_port | string,
+          "managed_files": firewall_managed_files,
+          "managed_dirs": firewall_managed_dirs,
+          "effective_tcp_ports": firewall_effective_tcp_ports,
+          "effective_udp_ports": firewall_effective_udp_ports,
+          "pre_deploy_ssh_allowed": firewall_current_ssh_allowed | default(false),
+          "pre_deploy_ufw_pkg_installed": firewall_ufw_pkg_installed,
+          "pre_deploy_nftables_pkg_installed": firewall_nftables_pkg_installed,
+          "pre_deploy_ufw_enabled": firewall_ufw_enabled_check.rc == 0,
+          "pre_deploy_ufw_status_verbose": firewall_ufw_status_verbose.stdout | default(''),
+          "pre_deploy_ufw_status_numbered": firewall_ufw_status_numbered.stdout | default(''),
+          "pre_deploy_sysctl_values": firewall_current_sysctl_values,
+          "pre_deploy_managed_dirs": firewall_current_managed_dirs | default({}),
+          "pre_deploy_managed_files": firewall_current_managed_files | default({})
+        } | to_nice_json
+      }}
+  when: not firewall_fact_stat.stat.exists
+  tags: [deploy, system, firewall, phase1]
+
+- name: Run firewall setup helper
+  ansible.builtin.import_tasks: setup.yml
+  when: firewall_setup | default(true)
+  tags: [deploy, system, firewall, phase1]
+
+- name: Run firewall rules helper
+  ansible.builtin.import_tasks: rules.yml
+  tags: [deploy, system, firewall, phase1]

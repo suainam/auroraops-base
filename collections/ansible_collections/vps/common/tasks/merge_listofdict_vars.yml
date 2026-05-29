@@ -1,0 +1,45 @@
+---
+# ===========================================
+# 通用对象列表变量合并任务
+# ===========================================
+# 用途: 合并 _global, _host 后缀的对象列表变量（List of Dicts）
+#
+# 与 merge_list_vars.yml 的区别:
+#   - merge_list_vars.yml: 简单字符串列表，支持 unique | sort | exclude
+#   - 本文件: 对象列表（每项是 dict），仅做拼接，不支持 unique/sort
+#
+# 输入参数:
+#   - merge_var_name: 基础变量名（不含后缀）
+#
+# 合并规则:
+#   final = global_list + host_list
+#   (保留顺序，不去重，因为 dict 不可直接比较)
+#
+# 示例:
+#   - include_tasks: merge_listofdict_vars.yml
+#     vars:
+#       merge_var_name: certbot_certs
+#
+# 结果:
+#   certbot_certs =
+#     certbot_certs_global (list of dicts) +
+#     certbot_certs_host (list of dicts)
+# ===========================================
+
+- name: "合并对象列表变量: {{ merge_var_name }}"
+  ansible.builtin.set_fact:
+    "{{ merge_var_name }}": >-
+      {{
+        (lookup('vars', merge_var_name + '_global', default=[]) | default([]))
+        + (lookup('vars', merge_var_name + '_host', default=[]) | default([]))
+      }}
+  tags: [always]
+
+- name: "调试: 显示 {{ merge_var_name }} 合并结果"
+  ansible.builtin.debug:
+    msg:
+      - "Global count: {{ (lookup('vars', merge_var_name + '_global', default=[]) | default([])) | length }}"
+      - "Host count: {{ (lookup('vars', merge_var_name + '_host', default=[]) | default([])) | length }}"
+      - "Final count: {{ (lookup('vars', merge_var_name)) | length }}"
+  when: ansible_verbosity >= 1
+  tags: [always]

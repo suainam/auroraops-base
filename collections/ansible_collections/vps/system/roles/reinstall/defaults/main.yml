@@ -1,0 +1,16 @@
+# Reinstall 角色默认变量
+# 注意: 不在此处定义 auroraops_roles，避免覆盖 host_vars 合并逻辑
+# 角色启用控制通过 group_vars/all/roles.yml 中的 auroraops_roles.system.reinstall 管理
+# 默认: false (重装是极高风险操作，必须显式启用)
+
+# 重装脚本 URL (默认：科技lion)
+reinstall_script_url: "https://kejilion.pro/kejilion.sh"
+
+# 重装说明（用于提示用户确认）
+reinstall_warning_msg: |
+  ⚠️  WARNING: SYSTEM REINSTALLATION INITIATED
+  ============================================
+  This will completely wipe the current OS and
+  install a fresh Debian 12 environment.
+  All data will be LOST unless backed up.
+  ============================================

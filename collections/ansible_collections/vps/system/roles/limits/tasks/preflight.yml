@@ -1,0 +1,69 @@
+- name: Check existing limits baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_fact_path }}"
+  register: limits_fact_stat
+  tags: [deploy, system, limits, phase0]
+
+- name: Read existing limits baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ limits_fact_path }}"
+  register: limits_fact_raw
+  when: limits_fact_stat.stat.exists
+  tags: [deploy, system, limits, phase0]
+
+- name: Parse existing limits baseline
+  ansible.builtin.set_fact:
+    limits_baseline: "{{ limits_fact_raw.content | b64decode | from_json }}"
+  when: limits_fact_stat.stat.exists
+  tags: [deploy, system, limits, phase0]
+
+- name: Validate limits baseline metadata
+  ansible.builtin.assert:
+    that:
+      - limits_baseline.auroraops_managed | default(false) | bool
+      - limits_baseline.version | default(0) | int >= 1
+      - limits_baseline.managed_file == limits_managed_file
+      - limits_baseline.pre_deploy_content is defined
+    fail_msg: "Existing limits baseline is invalid"
+  when: limits_fact_stat.stat.exists
+  tags: [deploy, system, limits, phase0]
+
+- name: Check current managed limits file state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_managed_file }}"
+  register: limits_managed_file_stat
+  tags: [deploy, system, limits, phase0]
+
+- name: Read current managed limits file
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ limits_managed_file }}"
+  register: limits_managed_file_raw
+  when: limits_managed_file_stat.stat.exists
+  tags: [deploy, system, limits, phase0]
+
+- name: Adopt legacy managed limits file as rollback baseline
+  ansible.builtin.debug:
+    msg: "Adopting existing {{ limits_managed_file }} as pre-deploy baseline because no limits baseline exists yet."
+  when:
+    - not limits_fact_stat.stat.exists
+    - limits_managed_file_stat.stat.exists
+  tags: [deploy, system, limits, phase0]
+
+- name: Build managed limits content
+  ansible.builtin.set_fact:
+    limits_desired_content: |
+      # Managed by AuroraOps: system.limits
+      * soft nofile {{ limits_nofile }}
+      * hard nofile {{ limits_nofile }}
+      root soft nofile {{ limits_nofile }}
+      root hard nofile {{ limits_nofile }}
+  tags: [deploy, system, limits, phase0]
+
+- name: Debug limits decision
+  ansible.builtin.debug:
+    msg: "ManagedFile={{ limits_managed_file }} BaselineExists={{ limits_fact_stat.stat.exists }} CheckMode={{ ansible_check_mode }} Nofile={{ limits_nofile }}"
+  tags: [deploy, system, limits, phase0]

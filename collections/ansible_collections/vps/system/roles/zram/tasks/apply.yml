@@ -1,0 +1,68 @@
+- name: Ensure facts.d directory exists for zram baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, zram, phase0]
+
+- name: Persist pre-deploy zram baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ zram_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "pre_deploy_package_installed": zram_package_installed,
+          "pre_deploy_config_exists": zram_config_exists,
+          "pre_deploy_config_content": zram_config_content,
+          "pre_deploy_service_enabled": zram_service_enabled,
+          "pre_deploy_active_zram": zram_active_before_deploy,
+          "pre_deploy_active_devices": zram_active_device_lines,
+          "auto_disabled_threshold_mb": zram_auto_disable_ram_mb_threshold | int
+        } | to_nice_json
+      }}
+  when: not zram_fact_stat.stat.exists
+  tags: [deploy, system, zram, phase0]
+
+- name: Skip managed zram apply when auto-disabled
+  ansible.builtin.debug:
+    msg: "Skipping zram apply because RAM {{ _actual_ram_mb }} exceeds threshold {{ zram_auto_disable_ram_mb_threshold }}"
+  when: _zram_auto_disabled
+  tags: [deploy, system, zram, phase0]
+
+- name: Install zram-tools
+  become: true
+  ansible.builtin.apt:
+    name: zram-tools
+    state: present
+    update_cache: true
+  when:
+    - not _zram_auto_disabled
+    - not zram_package_installed
+  tags: [deploy, system, zram, phase0]
+
+- name: Configure zramswap
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/default/zramswap
+    mode: "0644"
+    content: |
+      ALGO={{ zram_algo }}
+      PERCENT={{ zram_percent }}
+      PRIORITY={{ zram_priority }}
+  notify: Restart zramswap
+  when: not _zram_auto_disabled
+  tags: [deploy, system, zram, phase0]
+
+- name: Enable zramswap service
+  become: true
+  ansible.builtin.systemd:
+    name: zramswap
+    enabled: true
+    state: started
+  when: not _zram_auto_disabled
+  tags: [deploy, system, zram, phase0]

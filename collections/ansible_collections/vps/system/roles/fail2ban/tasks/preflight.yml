@@ -1,0 +1,129 @@
+---
+- name: Check existing fail2ban baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_fact_stat
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Read existing fail2ban baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_fact_raw
+  when: fail2ban_fact_stat.stat.exists
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Parse existing fail2ban baseline
+  ansible.builtin.set_fact:
+    fail2ban_baseline: "{{ fail2ban_fact_raw.content | b64decode | from_json }}"
+  when: fail2ban_fact_stat.stat.exists
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Validate fail2ban baseline metadata
+  ansible.builtin.assert:
+    that:
+      - fail2ban_baseline.auroraops_managed | default(false) | bool
+      - fail2ban_baseline.version | default(0) | int >= 1
+      - fail2ban_baseline.jail_local_path == fail2ban_jail_local_path
+      - fail2ban_baseline.pre_deploy_package_installed is defined
+      - fail2ban_baseline.pre_deploy_service_enabled is defined
+      - fail2ban_baseline.pre_deploy_service_running is defined
+      - fail2ban_baseline.pre_deploy_jail_local_exists is defined
+      - fail2ban_baseline.pre_deploy_jail_local_content is defined
+    fail_msg: "Existing fail2ban baseline is invalid"
+  when: fail2ban_fact_stat.stat.exists
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Gather fail2ban package facts
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Gather fail2ban service facts
+  become: true
+  ansible.builtin.service_facts:
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Check current fail2ban jail.local state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_jail_local_path }}"
+  register: fail2ban_jail_local_stat
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Read current fail2ban jail.local
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ fail2ban_jail_local_path }}"
+  register: fail2ban_jail_local_raw
+  when: fail2ban_jail_local_stat.stat.exists
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Adopt legacy fail2ban jail.local as rollback baseline
+  ansible.builtin.debug:
+    msg: "Adopting existing {{ fail2ban_jail_local_path }} as pre-deploy baseline because no fail2ban baseline exists yet."
+  when:
+    - not fail2ban_fact_stat.stat.exists
+    - fail2ban_jail_local_stat.stat.exists
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Build fail2ban preflight summary
+  ansible.builtin.set_fact:
+    fail2ban_preflight:
+      baseline_exists: "{{ fail2ban_fact_stat.stat.exists | default(false) }}"
+      package_installed: "{{ ansible_facts.packages[fail2ban_package_name] is defined }}"
+      service_enabled: "{{ ansible_facts.services[fail2ban_service_name ~ '.service'].status | default('disabled') == 'enabled' }}"
+      service_running: "{{ ansible_facts.services[fail2ban_service_name ~ '.service'].state | default('stopped') == 'running' }}"
+      jail_local_exists: "{{ fail2ban_jail_local_stat.stat.exists | default(false) }}"
+      jail_local_content: "{{ (fail2ban_jail_local_raw.content | b64decode) if (fail2ban_jail_local_raw is defined and fail2ban_jail_local_raw.content is defined) else '' }}"
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Check current apt sources.list state for fail2ban install
+  become: true
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: fail2ban_sources_stat
+  when: not fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Read current apt sources.list for fail2ban install
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/apt/sources.list
+  register: fail2ban_sources_raw
+  when:
+    - not fail2ban_preflight.package_installed | bool
+    - fail2ban_sources_stat.stat.exists | default(false)
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Parse apt sources.list content for fail2ban install
+  ansible.builtin.set_fact:
+    fail2ban_sources_content: "{{ fail2ban_sources_raw.content | b64decode }}"
+  when:
+    - not fail2ban_preflight.package_installed | bool
+    - fail2ban_sources_raw is defined
+    - fail2ban_sources_raw.content is defined
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Probe configured apt hosts for fail2ban install
+  ansible.builtin.command: "getent ahosts {{ item }}"
+  loop:
+    - mirrors.tuna.tsinghua.edu.cn
+    - security.debian.org
+    - deb.debian.org
+  register: fail2ban_apt_host_checks
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]
+
+- name: Assert at least one apt host resolves before fail2ban install
+  ansible.builtin.assert:
+    that:
+      - (fail2ban_apt_host_checks.results | selectattr('rc', 'equalto', 0) | list | length) > 0
+    fail_msg: "No configured apt host resolves for fail2ban install; fix sources or DNS before deployment"
+  when: not fail2ban_preflight.package_installed | bool
+  tags: [deploy, system, fail2ban, phase1]

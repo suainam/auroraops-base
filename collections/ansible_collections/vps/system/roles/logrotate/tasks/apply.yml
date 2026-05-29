@@ -1,0 +1,63 @@
+- name: Ensure facts.d directory exists for logrotate baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, logrotate, phase1]
+
+- name: Persist pre-deploy logrotate baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ logrotate_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "managed_file": logrotate_managed_file,
+          "managed_dir": logrotate_managed_dir,
+          "pre_deploy_main_exists": logrotate_main_stat.stat.exists | default(false),
+          "pre_deploy_main_content": (logrotate_main_raw.content | b64decode) if (logrotate_main_stat.stat.exists | default(false)) else '',
+          "service_configs": logrotate_service_config_baseline | default({}),
+          "managed_rotate_count": logrotate_rotate_count,
+          "managed_compress": logrotate_enable_compress
+        } | to_nice_json
+      }}
+  when: not logrotate_fact_stat.stat.exists
+  tags: [deploy, system, logrotate, phase1]
+
+- name: Configure logrotate rotate count
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ logrotate_managed_file }}"
+    regexp: '^rotate'
+    line: "{{ logrotate_desired_rotate_line }}"
+  notify: Force logrotate
+  tags: [deploy, system, logrotate, phase1, logrotate_manage_main]
+
+- name: Configure logrotate compression
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ logrotate_managed_file }}"
+    regexp: '^#?compress'
+    line: "compress"
+  when: logrotate_enable_compress | bool
+  notify: Force logrotate
+  tags: [deploy, system, logrotate, phase1, logrotate_manage_main]
+
+- name: Deploy service-specific logrotate configurations
+  become: true
+  ansible.builtin.template:
+    src: service_logrotate.conf.j2
+    dest: "{{ logrotate_managed_dir }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ logrotate_configs_to_deploy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: logrotate_configs_to_deploy | default([]) | length > 0
+  notify: Force logrotate
+  tags: [deploy, system, logrotate, phase1, logrotate_manage_service_configs]

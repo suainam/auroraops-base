@@ -1,0 +1,59 @@
+// Unattended-Upgrade::Origins-Pattern controls which packages are upgraded.
+// Lines below have the format format: "keyword=value,...".  A
+// package will be upgraded only the lines in the origins-pattern match.
+// 
+// The available keywords are:
+//   origin       - the origin of the package, e.g. "Debian"
+//   archive      - the archive of the package, e.g. "stable"
+//   component    - the component of the package, e.g. "main"
+//   label        - the label of the package, e.g. "Debian"
+//   site         - the hostname of the archive, e.g. "cdn.debian.net"
+//   codename     - the release codename of the package, e.g. "bookworm"
+//   section      - the section of the package, e.g. "main" (since apt 2.9.23)
+// 
+// The available values are:
+//   the value of the keyword
+//   *            - wildcard matches anything
+//   ${distro_id} - the distribution id, e.g. "Debian"
+//   ${distro_codename} - the distribution codename, e.g. "bookworm"
+
+Unattended-Upgrade::Origins-Pattern {
+{% for pattern in unattended_upgrades_origins_patterns %}
+    "{{ pattern }}";
+{% endfor %}
+};
+
+// Python list of packages to not update
+Unattended-Upgrade::Package-Blacklist {
+{% for pkg in unattended_upgrades_blacklist %}
+    "{{ pkg }}";
+{% endfor %}
+};
+
+// Remove unused automatically installed kernel-related packages
+// (kernel images, kernel headers and kernel version locked tools).
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::InstallOnShutdown "false";
+
+// Send email to this address for problems or packages upgrades
+// If empty or unset then no email is sent, make sure that you
+// have a working mail setup on your system. A package 'mailx'
+// must be installed or the 'mail' command should be in the :path.
+Unattended-Upgrade::Mail "{{ unattended_upgrades_mail }}";
+
+// Set this value to "true" to get emails only on errors. Default
+// is to always send an email if the Package-Mail variable is set.
+Unattended-Upgrade::MailOnlyOnError "{{ unattended_upgrades_mail_only_on_error | lower }}";
+
+// Do automatic removal of newly unused dependencies after the upgrade
+Unattended-Upgrade::Remove-Unused-Dependencies "{{ unattended_upgrades_autoremove | lower }}";
+
+// Automatically reboot *WITHOUT CONFIRMATION* if
+//  the file /var/run/reboot-required is found after the upgrade
+Unattended-Upgrade::Automatic-Reboot "{{ unattended_upgrades_automatic_reboot | lower }}";
+
+// If automatic reboot is enabled and needed, reboot at the specific
+// time instead of immediately
+//  Default: "now"
+Unattended-Upgrade::Automatic-Reboot-Time "{{ unattended_upgrades_automatic_reboot_time }}";

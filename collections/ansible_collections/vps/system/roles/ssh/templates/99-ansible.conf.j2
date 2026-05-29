@@ -1,0 +1,18 @@
+# Ansible Managed SSH Configuration
+# Placed in /etc/ssh/sshd_config.d/99-ansible.conf
+
+Port {{ ssh_port }}
+PermitRootLogin {{ ssh_permit_root_login }}
+PubkeyAuthentication {{ ssh_pubkey_authentication }}
+PasswordAuthentication {{ ssh_password_authentication }}
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}
+UseDNS {{ ssh_use_dns }}
+GSSAPIAuthentication {{ ssh_gssapi_authentication }}
+PrintMotd {{ ssh_print_motd }}
+PrintLastLog {{ ssh_print_last_log }}
+IPQoS {{ ssh_ipqos }}
+
+# Session Hardening
+MaxAuthTries {{ ssh_max_auth_tries }}
+LoginGraceTime {{ ssh_login_grace_time }}

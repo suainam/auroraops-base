@@ -1,0 +1,109 @@
+---
+- name: 验证系统时区设置
+  become: true
+  ansible.builtin.command: timedatectl status
+  register: timezone_status
+  changed_when: false
+  failed_when: system_timezone not in timezone_status.stdout
+  tags: [verify, system, base, base_verify_timezone, phase0]
+
+- name: 验证系统字符编码设置
+  become: true
+  ansible.builtin.shell: locale -a | grep -i "{{ system_locale | regex_replace('\\..*$', '') | regex_replace('-', '') }}"
+  register: locale_status
+  changed_when: false
+  failed_when: locale_status.rc != 0
+  tags: [verify, system, base, base_verify_locale, phase0]
+
+- name: 验证 NTP 客户端 (systemd-timesyncd) 服务状态
+  become: true
+  ansible.builtin.service_facts:
+  tags: [verify, system, base, base_verify_ntp, phase0]
+
+- name: 检查 systemd-timesyncd 服务是否运行和启用
+  become: true
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services['systemd-timesyncd.service'].state == 'running'
+      - ansible_facts.services['systemd-timesyncd.service'].status == 'enabled'
+    fail_msg: "systemd-timesyncd 服务未运行或未启用"
+  tags: [verify, system, base, base_verify_ntp, phase0]
+
+- name: 验证 NTP 服务器配置
+  become: true
+  ansible.builtin.command: grep -q "NTP={{ ntp_servers | join(' ') }}" /etc/systemd/timesyncd.conf.d/99-ntp.conf
+  register: ntp_config_check
+  changed_when: false
+  failed_when: ntp_config_check.rc != 0
+  tags: [verify, system, base, base_verify_ntp, phase0]
+
+- name: 验证 DNS 解析服务器配置是否生效
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/resolv.conf
+  register: _resolv_conf_raw
+  tags: [verify, system, base, base_verify_dns, phase0]
+
+- name: Determine Optimized DNS Nameservers for verification
+  ansible.builtin.set_fact:
+    optimized_dns_servers: >-
+      {{ ['223.5.5.5', '119.29.29.29'] if (performance.geo.country | default('UNKNOWN') == 'CN') else ['8.8.8.8', '1.1.1.1'] }}
+  tags: [verify, system, base, base_verify_dns, phase0]
+
+- name: 检查 DNS 解析服务器条目
+  ansible.builtin.assert:
+    that:
+      - "item in (_resolv_conf_raw.content | b64decode)"
+    fail_msg: "DNS 解析服务器 {{ item }} 缺失"
+  loop: "{{ optimized_dns_servers }}"
+  tags: [verify, system, base, base_verify_dns, phase0]
+
+- name: 验证 DNS 解析功能 (nslookup 或 getent)
+  ansible.builtin.command: getent ahosts google.com
+  register: _dns_resolv_test
+  changed_when: false
+  failed_when: _dns_resolv_test.rc != 0
+  tags: [verify, system, base, base_verify_dns, phase0]
+
+- name: 验证非必要服务已禁用且被屏蔽
+  become: true
+  ansible.builtin.service_facts:
+  tags: [verify, system, base, base_optimization, phase0]
+
+- name: 检查 Exim4, PackageKit 和 Man-DB 状态
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services['exim4.service'] is not defined or ansible_facts.services['exim4.service'].state != 'running'
+      - ansible_facts.services['packagekit.service'] is not defined or ansible_facts.services['packagekit.service'].state != 'running'
+      - ansible_facts.services['man-db.timer'] is not defined or ansible_facts.services['man-db.timer'].state != 'running'
+    fail_msg: "Exim4, PackageKit 或 Man-DB 仍在运行，优化未生效"
+    success_msg: "服务优化验证通过 (Exim4, PackageKit 已停止)"
+  tags: [verify, system, base, base_optimization, phase0]
+
+- name: Ensure target directory exists for verification scripts
+  become: true
+  ansible.builtin.file:
+    path: /root/AuroraOps/scripts
+    state: directory
+    mode: '0755'
+  tags: [verify, system, base, base_verify_phase0, phase0]
+
+- name: Sync baseline verification script to target
+  become: true
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/verify_phase0.py"
+    dest: /root/AuroraOps/scripts/verify_phase0.py
+    mode: '0755'
+  tags: [verify, system, base, base_verify_phase0, phase0]
+
+- name: 运行系统基础设施基线验证脚本 (Phase 0)
+  become: true
+  ansible.builtin.command: /root/AuroraOps/scripts/verify_phase0.py
+  register: verify_phase0_output
+  changed_when: false
+  tags: [verify, system, base, base_verify_phase0, phase0]
+
+- name: 显示系统基线验证结果
+  ansible.builtin.debug:
+    var: verify_phase0_output.stdout_lines
+  tags: [verify, system, base, base_verify_phase0, phase0]

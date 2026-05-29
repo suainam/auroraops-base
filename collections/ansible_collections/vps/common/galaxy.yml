@@ -1,0 +1,13 @@
+---
+namespace: vps
+name: common
+version: 1.0.0
+readme: README.md
+authors:
+  - AuroraOps
+description: Common shared tasks and utilities for AuroraOps
+license:
+  - MIT
+tags: []
+dependencies: {}
+repository: ""

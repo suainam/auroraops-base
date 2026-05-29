@@ -1,0 +1,55 @@
+- name: Ensure facts.d directory exists for journald baseline
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, journald, phase0]
+
+- name: Persist pre-deploy journald baseline
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ journald_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "managed_dir": journald_managed_dir,
+          "managed_file": journald_managed_file,
+          "pre_deploy_dir_exists": journald_managed_dir_stat.stat.exists | default(false),
+          "pre_deploy_dir_mode": journald_managed_dir_stat.stat.mode | default("0755"),
+          "pre_deploy_file_exists": journald_managed_file_stat.stat.exists | default(false),
+          "pre_deploy_content": (journald_managed_file_raw.content | b64decode) if (journald_managed_file_stat.stat.exists | default(false)) else '',
+          "managed_settings": {
+            "system_max_use": journald_system_max_use,
+            "rate_limit_interval": journald_rate_limit_interval,
+            "rate_limit_burst": journald_rate_limit_burst,
+            "storage": journald_storage,
+            "sync_interval": journald_sync_interval,
+            "forward_to_syslog": journald_forward_to_syslog
+          }
+        } | to_nice_json
+      }}
+  when: not journald_fact_stat.stat.exists
+  tags: [deploy, system, journald, phase0]
+
+- name: Ensure journald override directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ journald_managed_dir }}"
+    state: directory
+    mode: "0755"
+  tags: [deploy, system, journald, phase0]
+
+- name: Write managed journald override file
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ journald_managed_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ journald_desired_content }}"
+  notify: Restart journald
+  tags: [deploy, system, journald, phase0]

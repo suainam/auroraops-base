@@ -1,0 +1,85 @@
+- name: Check limits baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_fact_path }}"
+  register: limits_fact_stat
+  tags: [rollback, system, limits, phase0]
+
+- name: Check managed limits file presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_managed_file }}"
+  register: limits_managed_file_stat
+  tags: [rollback, system, limits, phase0]
+
+- name: Refuse rollback without baseline when managed artifacts remain
+  ansible.builtin.fail:
+    msg: "Limits baseline is missing while managed limits artifacts still exist"
+  when:
+    - not limits_fact_stat.stat.exists
+    - limits_managed_file_stat.stat.exists | default(false)
+  tags: [rollback, system, limits, phase0]
+
+- name: No managed limits state to rollback
+  ansible.builtin.debug:
+    msg: "No limits baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not limits_fact_stat.stat.exists
+    - not (limits_managed_file_stat.stat.exists | default(false))
+  tags: [rollback, system, limits, phase0]
+
+- name: Read limits baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ limits_fact_path }}"
+  register: limits_fact_raw
+  when: limits_fact_stat.stat.exists
+  tags: [rollback, system, limits, phase0]
+
+- name: Parse limits baseline for rollback
+  ansible.builtin.set_fact:
+    limits_baseline: "{{ limits_fact_raw.content | b64decode | from_json }}"
+  when: limits_fact_stat.stat.exists
+  tags: [rollback, system, limits, phase0]
+
+- name: Validate limits baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - limits_baseline.auroraops_managed | default(false) | bool
+      - limits_baseline.version | default(0) | int >= 1
+      - limits_baseline.managed_file == limits_managed_file
+      - limits_baseline.pre_deploy_content is defined
+    fail_msg: "Limits baseline content is invalid for rollback"
+  when: limits_fact_stat.stat.exists
+  tags: [rollback, system, limits, phase0]
+
+- name: Restore previous managed limits file content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ limits_managed_file }}"
+    content: "{{ limits_baseline.pre_deploy_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - limits_fact_stat.stat.exists
+    - limits_baseline.pre_deploy_file_exists | bool
+  tags: [rollback, system, limits, phase0, limits_restore_managed_file]
+
+- name: Remove managed limits file when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ limits_managed_file }}"
+    state: absent
+  when:
+    - limits_fact_stat.stat.exists
+    - not (limits_baseline.pre_deploy_file_exists | bool)
+  tags: [rollback, system, limits, phase0, limits_remove_managed_file]
+
+- name: Remove limits baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ limits_fact_path }}"
+    state: absent
+  when: limits_fact_stat.stat.exists
+  tags: [rollback, system, limits, phase0, limits_remove_baseline]

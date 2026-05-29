@@ -1,0 +1,60 @@
+---
+- name: Verify zerotier service facts
+  become: true
+  ansible.builtin.service_facts:
+  tags:
+    - verify
+    - system
+    - zerotier
+    - phase0
+
+- name: Assert zerotier service state
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[zerotier_service_name ~ '.service'].status | default('disabled') == 'enabled'
+      - ansible_facts.services[zerotier_service_name ~ '.service'].state | default('stopped') == 'running'
+    fail_msg: "ZeroTier service is not enabled and running"
+  tags:
+    - verify
+    - system
+    - zerotier
+    - phase0
+
+- name: Check zerotier CLI status
+  become: true
+  ansible.builtin.command: zerotier-cli info
+  register: zerotier_status
+  changed_when: false
+  failed_when: "'200 info' not in zerotier_status.stdout"
+  tags:
+    - verify
+    - system
+    - zerotier
+    - phase0
+
+- name: Verify zerotier network join
+  become: true
+  ansible.builtin.command: zerotier-cli listnetworks
+  register: zerotier_networks
+  changed_when: false
+  when: zerotier_network_id | length > 0
+  failed_when: zerotier_network_id not in zerotier_networks.stdout
+  tags:
+    - verify
+    - system
+    - zerotier
+    - phase0
+
+- name: Verify ZeroTier port in UFW rules
+  become: true
+  ansible.builtin.shell: ufw status | grep -E "{{ zerotier_port }}/udp.*ALLOW"
+  register: ufw_zerotier_check
+  changed_when: false
+  failed_when: ufw_zerotier_check.rc != 0
+  when: ansible_facts.services['ufw.service'] is defined and ansible_facts.services['ufw.service'].state == 'running'
+  tags:
+    - verify
+    - system
+    - zerotier
+    - phase0
+

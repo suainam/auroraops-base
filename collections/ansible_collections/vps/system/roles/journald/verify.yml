@@ -1,0 +1,14 @@
+- name: 验证 journald 配置
+  become: yes
+  ansible.builtin.command: systemd-analyze cat-config systemd/journald.conf
+  register: journald_conf
+  changed_when: false
+  tags: [journald]
+
+- name: 检查 journald 限制
+  assert:
+    that: "'SystemMaxUse=10M' in journald_conf.stdout"
+    fail_msg: "❌ journald 限制未配置为 10M"
+    success_msg: "✅ journald 限制正确 (10M)"
+  tags: [journald]
+

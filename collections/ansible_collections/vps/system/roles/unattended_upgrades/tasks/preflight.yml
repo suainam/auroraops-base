@@ -1,0 +1,105 @@
+---
+- name: Check existing unattended_upgrades baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_fact_path }}"
+  register: unattended_upgrades_fact_stat
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Read existing unattended_upgrades baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ unattended_upgrades_fact_path }}"
+  register: unattended_upgrades_fact_raw
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Parse existing unattended_upgrades baseline
+  ansible.builtin.set_fact:
+    unattended_upgrades_baseline: "{{ unattended_upgrades_fact_raw.content | b64decode | from_json }}"
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Validate unattended_upgrades baseline metadata
+  ansible.builtin.assert:
+    that:
+      - unattended_upgrades_baseline.auroraops_managed | default(false) | bool
+      - unattended_upgrades_baseline.version | default(0) | int >= 1
+      - unattended_upgrades_baseline.auto_upgrades_path == unattended_upgrades_auto_upgrades_path
+      - unattended_upgrades_baseline.config_path == unattended_upgrades_config_path
+      - unattended_upgrades_baseline.pre_deploy_auto_upgrades_exists is defined
+      - unattended_upgrades_baseline.pre_deploy_auto_upgrades_content is defined
+      - unattended_upgrades_baseline.pre_deploy_config_exists is defined
+      - unattended_upgrades_baseline.pre_deploy_config_content is defined
+      - unattended_upgrades_baseline.pre_deploy_package_installed is defined
+      - unattended_upgrades_baseline.pre_deploy_listchanges_installed is defined
+      - unattended_upgrades_baseline.pre_deploy_service_enabled is defined
+      - unattended_upgrades_baseline.pre_deploy_service_running is defined
+    fail_msg: "Existing unattended_upgrades baseline is invalid"
+  when: unattended_upgrades_fact_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Gather package facts for unattended_upgrades preflight
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Check current unattended_upgrades config state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_config_path }}"
+  register: unattended_upgrades_config_stat
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Read current unattended_upgrades config
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ unattended_upgrades_config_path }}"
+  register: unattended_upgrades_config_raw
+  when: unattended_upgrades_config_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Check current auto-upgrades config state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ unattended_upgrades_auto_upgrades_path }}"
+  register: unattended_upgrades_auto_upgrades_stat
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Read current auto-upgrades config
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ unattended_upgrades_auto_upgrades_path }}"
+  register: unattended_upgrades_auto_upgrades_raw
+  when: unattended_upgrades_auto_upgrades_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Adopt legacy unattended_upgrades configs as rollback baseline
+  ansible.builtin.debug:
+    msg: >-
+      Adopting existing unattended-upgrades config files as pre-deploy baseline
+      because no unattended_upgrades baseline exists yet.
+  when:
+    - not unattended_upgrades_fact_stat.stat.exists
+    - unattended_upgrades_config_stat.stat.exists or unattended_upgrades_auto_upgrades_stat.stat.exists
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Gather unattended_upgrades service facts
+  become: true
+  ansible.builtin.service_facts:
+  tags: [deploy, system, unattended_upgrades, phase1]
+
+- name: Build unattended_upgrades preflight summary
+  ansible.builtin.set_fact:
+    unattended_upgrades_preflight:
+      baseline_exists: "{{ unattended_upgrades_fact_stat.stat.exists | default(false) }}"
+      config_exists: "{{ unattended_upgrades_config_stat.stat.exists | default(false) }}"
+      config_content: "{{ (unattended_upgrades_config_raw.content | b64decode) if (unattended_upgrades_config_raw is defined and unattended_upgrades_config_raw.content is defined) else '' }}"
+      auto_upgrades_exists: "{{ unattended_upgrades_auto_upgrades_stat.stat.exists | default(false) }}"
+      auto_upgrades_content: "{{ (unattended_upgrades_auto_upgrades_raw.content | b64decode) if (unattended_upgrades_auto_upgrades_raw is defined and unattended_upgrades_auto_upgrades_raw.content is defined) else '' }}"
+      package_installed: "{{ ansible_facts.packages[unattended_upgrades_package_name] is defined }}"
+      listchanges_installed: "{{ ansible_facts.packages[unattended_upgrades_listchanges_package_name] is defined }}"
+      service_enabled: "{{ ansible_facts.services[unattended_upgrades_service_name ~ '.service'].status | default('disabled') == 'enabled' }}"
+      service_running: "{{ ansible_facts.services[unattended_upgrades_service_name ~ '.service'].state | default('stopped') == 'running' }}"
+  tags: [deploy, system, unattended_upgrades, phase1]

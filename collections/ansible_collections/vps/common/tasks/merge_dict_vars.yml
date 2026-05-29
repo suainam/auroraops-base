@@ -1,0 +1,40 @@
+---
+# ===========================================
+# 通用字典变量合并任务
+# ===========================================
+# 用途: 合并 _global, _host 后缀的字典变量
+# 
+# 输入参数:
+#   - merge_var_name: 基础变量名（不含后缀）
+#
+# 合并规则:
+#   final = global | combine(host, recursive=True)
+#   (host 中的键会覆盖 global 中的同名键)
+#
+# 注意:
+#   使用 lazy='yes' 延迟变量解析，避免在合并时解析 Jinja2 变量
+#   这样可以确保变量在实际使用时才解析，避免未定义变量错误
+#
+# 示例:
+#   - include_tasks: merge_dict_vars.yml
+#     vars:
+#       merge_var_name: nginx_sites_config
+#
+# 结果:
+#   nginx_sites_config = 
+#     nginx_sites_config_global | combine(nginx_sites_config_host)
+# ===========================================
+
+- name: "合并字典变量: {{ merge_var_name }}"
+  ansible.builtin.set_fact:
+    "{{ merge_var_name }}": "{{ (lookup('vars', merge_var_name + '_global', default={}) | default({})) | combine(lookup('vars', merge_var_name + '_host', default={}) | default({}), recursive=True) }}"
+  tags: [always]
+
+- name: "调试: 显示 {{ merge_var_name }} 合并结果"
+  ansible.builtin.debug:
+    msg:
+      - "Global keys: {{ (lookup('vars', merge_var_name + '_global', default={}) | default({})).keys() | list }}"
+      - "Host keys: {{ (lookup('vars', merge_var_name + '_host', default={}) | default({})).keys() | list }}"
+      - "Final keys: {{ (lookup('vars', merge_var_name)).keys() | list }}"
+  when: ansible_verbosity >= 1
+  tags: [always]

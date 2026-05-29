@@ -1,0 +1,9 @@
+---
+- name: Restart systemd-timesyncd
+  become: yes
+  ansible.builtin.service:
+    name: systemd-timesyncd
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - auroraops_has_systemd | default(false) | bool

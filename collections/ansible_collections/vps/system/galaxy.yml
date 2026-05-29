@@ -1,0 +1,11 @@
+namespace: vps
+name: system
+version: 1.1.0
+readme: README.md
+authors:
+  - suai
+description: "system roles collection"
+license: MIT
+tags: [ansible, vps, system]
+dependencies:
+  community.general: ">=1.0.0"

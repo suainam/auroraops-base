@@ -1,0 +1,52 @@
+---
+- name: Verify benchmark script presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_script_path }}"
+  register: benchmark_verify_script
+  tags: [verify, system, benchmark, phase0]
+
+- name: Verify benchmark fact presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ benchmark_fact_path }}"
+  register: benchmark_verify_fact
+  tags: [verify, system, benchmark, phase0]
+
+- name: Reload ansible local facts for benchmark verification
+  ansible.builtin.setup:
+    filter: ansible_local
+  tags: [verify, system, benchmark, phase0]
+
+- name: Assert benchmark managed state
+  ansible.builtin.assert:
+    that:
+      - benchmark_verify_script.stat.exists
+      - benchmark_verify_script.stat.mode == '0755'
+      - benchmark_verify_fact.stat.exists
+      - ansible_local.performance is defined
+      - ansible_local.performance.geo is defined
+      - ansible_local.performance.network is defined
+      - ansible_local.performance.hardware is defined
+    fail_msg: "Benchmark managed state is incomplete"
+  tags: [verify, system, benchmark, phase0]
+
+- name: Verify local benchmark host_vars block
+  delegate_to: localhost
+  become: false
+  ansible.builtin.slurp:
+    src: "{{ benchmark_host_vars_path }}"
+  register: benchmark_verify_host_vars
+  vars:
+    ansible_become: false
+  when: benchmark_sync_to_local | bool
+  tags: [verify, system, benchmark, phase0]
+
+- name: Assert local benchmark host_vars block exists
+  ansible.builtin.assert:
+    that:
+      - "'BEGIN ANSIBLE MANAGED BLOCK: BENCHMARK PERFORMANCE' in (benchmark_verify_host_vars.content | b64decode)"
+      - "'performance:' in (benchmark_verify_host_vars.content | b64decode)"
+    fail_msg: "Benchmark host_vars block is missing"
+  when: benchmark_sync_to_local | bool
+  tags: [verify, system, benchmark, phase0]

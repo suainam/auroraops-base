@@ -1,0 +1,4 @@
+repo: auroraops-base
+version: 0.0.0-unreleased
+compatibility:
+  dependencies: []

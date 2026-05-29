@@ -1,0 +1,13 @@
+---
+roles:
+  # - name: nickjj.docker  <-- Removed
+  #   version: "v2.5.1"
+  - name: geerlingguy.certbot
+    version: "5.4.1"
+
+collections:
+  - name: ansible.posix
+    version: "2.1.0"
+  - name: community.docker
+  - name: community.general
+  - name: community.postgresql

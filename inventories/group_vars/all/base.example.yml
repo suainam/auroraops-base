@@ -1,0 +1,8 @@
+---
+# Base infrastructure defaults for a new Debian 12 VPS.
+base_admin_user: admin
+base_enable_fail2ban: true
+base_enable_firewall: true
+base_enable_unattended_upgrades: true
+base_enable_swap: true
+base_enable_zram: true

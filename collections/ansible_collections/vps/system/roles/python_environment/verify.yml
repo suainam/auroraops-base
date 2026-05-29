@@ -1,0 +1,47 @@
+---
+# verify file for vps.applications.python_environment
+
+- name: "[Python Environment Verify] Check if python{{ python_version }}-pip is installed"
+  ansible.builtin.command: "dpkg -s python{{ python_version }}-pip"
+  register: pip_status
+  changed_when: false
+  failed_when: pip_status.rc != 0
+  when: python_install_pip
+  tags:
+    - phase3
+    - applications
+    - python_environment
+    - verify
+
+- name: "[Python Environment Verify] Check if python{{ python_version }}-venv is installed"
+  ansible.builtin.command: "dpkg -s python{{ python_version }}-venv"
+  register: venv_status
+  changed_when: false
+  failed_when: venv_status.rc != 0
+  when: python_ensure_venv
+  tags:
+    - phase3
+    - applications
+    - python_environment
+    - verify
+
+- name: "[Python Environment Verify] Check pip version (if upgraded)"
+  ansible.builtin.command: "pip{{ python_version }} --version"
+  register: pip_version_output
+  changed_when: false
+  when: python_upgrade_pip
+  tags:
+    - phase3
+    - applications
+    - python_environment
+    - verify
+
+- name: "[Python Environment Verify] Display pip version (if upgraded)"
+  ansible.builtin.debug:
+    msg: "Pip version: {{ pip_version_output.stdout }}"
+  when: python_upgrade_pip and pip_version_output.stdout is defined
+  tags:
+    - phase3
+    - applications
+    - python_environment
+    - verify

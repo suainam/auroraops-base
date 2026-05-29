@@ -1,0 +1,2 @@
+- name: Run systemd_priority verify
+  ansible.builtin.import_tasks: tasks/verify.yml

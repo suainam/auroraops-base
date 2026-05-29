@@ -1,0 +1,125 @@
+---
+- name: Check fail2ban baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_fact_stat
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Check fail2ban jail.local presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_jail_local_path }}"
+  register: fail2ban_jail_local_stat
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Refuse rollback without baseline when managed fail2ban artifacts remain
+  ansible.builtin.fail:
+    msg: "fail2ban baseline is missing while managed fail2ban artifacts still exist"
+  when:
+    - not fail2ban_fact_stat.stat.exists
+    - fail2ban_jail_local_stat.stat.exists | default(false)
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: No managed fail2ban state to rollback
+  ansible.builtin.debug:
+    msg: "No fail2ban baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not fail2ban_fact_stat.stat.exists
+    - not (fail2ban_jail_local_stat.stat.exists | default(false))
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Read fail2ban baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_fact_raw
+  when: fail2ban_fact_stat.stat.exists
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Parse fail2ban baseline for rollback
+  ansible.builtin.set_fact:
+    fail2ban_baseline: "{{ fail2ban_fact_raw.content | b64decode | from_json }}"
+  when: fail2ban_fact_stat.stat.exists
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Validate fail2ban baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - fail2ban_baseline.auroraops_managed | default(false) | bool
+      - fail2ban_baseline.version | default(0) | int >= 1
+      - fail2ban_baseline.jail_local_path == fail2ban_jail_local_path
+      - fail2ban_baseline.pre_deploy_package_installed is defined
+      - fail2ban_baseline.pre_deploy_service_enabled is defined
+      - fail2ban_baseline.pre_deploy_service_running is defined
+      - fail2ban_baseline.pre_deploy_jail_local_exists is defined
+      - fail2ban_baseline.pre_deploy_jail_local_content is defined
+    fail_msg: "fail2ban baseline content is invalid for rollback"
+  when: fail2ban_fact_stat.stat.exists
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Restore pre-deploy fail2ban jail.local
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ fail2ban_jail_local_path }}"
+    content: "{{ fail2ban_baseline.pre_deploy_jail_local_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - fail2ban_fact_stat.stat.exists
+    - fail2ban_baseline.pre_deploy_jail_local_exists | bool
+  register: fail2ban_restore_jail_local_result
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Remove fail2ban jail.local when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ fail2ban_jail_local_path }}"
+    state: absent
+  when:
+    - fail2ban_fact_stat.stat.exists
+    - not (fail2ban_baseline.pre_deploy_jail_local_exists | bool)
+  register: fail2ban_remove_jail_local_result
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Restart fail2ban after restoring jail.local when package existed before deploy
+  become: true
+  ansible.builtin.service:
+    name: "{{ fail2ban_service_name }}"
+    state: restarted
+  when:
+    - fail2ban_fact_stat.stat.exists
+    - fail2ban_baseline.pre_deploy_package_installed | bool
+    - fail2ban_baseline.pre_deploy_service_running | bool
+    - (fail2ban_restore_jail_local_result is defined and fail2ban_restore_jail_local_result.changed) or (fail2ban_remove_jail_local_result is defined and fail2ban_remove_jail_local_result.changed)
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Restore fail2ban service state
+  become: true
+  ansible.builtin.service:
+    name: "{{ fail2ban_service_name }}"
+    enabled: "{{ fail2ban_baseline.pre_deploy_service_enabled | bool }}"
+    state: "{{ 'started' if fail2ban_baseline.pre_deploy_service_running | bool else 'stopped' }}"
+  when:
+    - fail2ban_fact_stat.stat.exists
+    - fail2ban_baseline.pre_deploy_package_installed | bool
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Remove fail2ban package when absent before deploy
+  become: true
+  ansible.builtin.package:
+    name: "{{ fail2ban_package_name }}"
+    state: absent
+  when:
+    - fail2ban_fact_stat.stat.exists
+    - not (fail2ban_baseline.pre_deploy_package_installed | bool)
+  tags: [rollback, system, fail2ban, phase1]
+
+- name: Remove fail2ban baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ fail2ban_fact_path }}"
+    state: absent
+  when: fail2ban_fact_stat.stat.exists
+  tags: [rollback, system, fail2ban, phase1]

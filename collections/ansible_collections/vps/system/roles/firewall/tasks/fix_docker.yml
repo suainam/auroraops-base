@@ -1,0 +1,15 @@
+  - name: Check if Docker is active
+    become: yes
+    ansible.builtin.command: systemctl is-active docker
+    register: docker_active
+    failed_when: false
+    changed_when: false
+    tags: [deploy, system, firewall, phase1]
+
+  - name: Restart Docker to restore network rules (fix UFW conflict)
+    become: yes
+    ansible.builtin.service:
+      name: docker
+      state: restarted
+    when: docker_active.rc == 0
+    tags: [deploy, system, firewall, phase1]

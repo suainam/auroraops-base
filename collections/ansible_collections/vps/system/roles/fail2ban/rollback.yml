@@ -1,0 +1,4 @@
+---
+- name: Roll back managed fail2ban state
+  ansible.builtin.import_tasks: tasks/rollback.yml
+  tags: [rollback, system, fail2ban, phase1]

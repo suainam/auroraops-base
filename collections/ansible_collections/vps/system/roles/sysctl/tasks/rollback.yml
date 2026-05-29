@@ -1,0 +1,133 @@
+- name: Check sysctl baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_fact_path }}"
+  register: sysctl_fact_stat
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Check managed sysctl file presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_managed_file }}"
+  register: sysctl_managed_file_stat
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Check managed module persist files for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
+  loop: "{{ sysctl_managed_modules }}"
+  register: sysctl_module_file_stats
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Parse managed module artifact presence
+  ansible.builtin.set_fact:
+    sysctl_managed_module_artifacts_present: "{{ (sysctl_module_file_stats.results | selectattr('stat.exists', 'defined') | selectattr('stat.exists') | list | length) > 0 }}"
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Refuse rollback without baseline when managed artifacts remain
+  ansible.builtin.fail:
+    msg: "Sysctl baseline is missing while managed sysctl artifacts still exist"
+  when:
+    - not sysctl_fact_stat.stat.exists
+    - (sysctl_managed_file_stat.stat.exists | default(false)) or sysctl_managed_module_artifacts_present
+  tags: [rollback, system, sysctl, phase0]
+
+- name: No managed sysctl state to rollback
+  ansible.builtin.debug:
+    msg: "No sysctl baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not sysctl_fact_stat.stat.exists
+    - not (sysctl_managed_file_stat.stat.exists | default(false))
+    - not sysctl_managed_module_artifacts_present
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Read sysctl baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ sysctl_fact_path }}"
+  register: sysctl_fact_raw
+  when: sysctl_fact_stat.stat.exists
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Parse sysctl baseline for rollback
+  ansible.builtin.set_fact:
+    sysctl_baseline: "{{ sysctl_fact_raw.content | b64decode | from_json }}"
+  when: sysctl_fact_stat.stat.exists
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Validate sysctl baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - sysctl_baseline.auroraops_managed | default(false) | bool
+      - sysctl_baseline.version | default(0) | int >= 1
+      - sysctl_baseline.sysctl_managed_file == sysctl_managed_file
+      - sysctl_baseline.pre_deploy_values is defined
+      - sysctl_baseline.pre_deploy_module_files is defined
+    fail_msg: "Sysctl baseline content is invalid for rollback"
+  when: sysctl_fact_stat.stat.exists
+  tags: [rollback, system, sysctl, phase0]
+
+- name: Restore previous managed sysctl file content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ sysctl_managed_file }}"
+    content: "{{ sysctl_baseline.pre_deploy_sysctl_file_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - sysctl_fact_stat.stat.exists
+    - sysctl_baseline.pre_deploy_sysctl_file_exists | bool
+  tags: [rollback, system, sysctl, phase0, sysctl_restore_managed_file]
+
+- name: Remove managed sysctl file when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ sysctl_managed_file }}"
+    state: absent
+  when:
+    - sysctl_fact_stat.stat.exists
+    - not (sysctl_baseline.pre_deploy_sysctl_file_exists | bool)
+  tags: [rollback, system, sysctl, phase0, sysctl_remove_managed_file]
+
+- name: Restore previous module persist files
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ item.value.path }}"
+    content: "{{ item.value.content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ (sysctl_baseline.pre_deploy_module_files | default({})) | dict2items }}"
+  when:
+    - sysctl_fact_stat.stat.exists
+    - item.value.exists | bool
+  tags: [rollback, system, sysctl, phase0, sysctl_restore_module_persist_config]
+
+- name: Remove managed module persist files absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.value.path }}"
+    state: absent
+  loop: "{{ (sysctl_baseline.pre_deploy_module_files | default({})) | dict2items }}"
+  when:
+    - sysctl_fact_stat.stat.exists
+    - not (item.value.exists | bool)
+  tags: [rollback, system, sysctl, phase0, sysctl_remove_module_persist_config]
+
+- name: Restore pre-deploy sysctl runtime values
+  become: true
+  ansible.builtin.command: "sysctl -w {{ item.key }}={{ item.value | quote }}"
+  loop: "{{ (sysctl_baseline.pre_deploy_values | default({})) | dict2items }}"
+  changed_when: false
+  when: sysctl_fact_stat.stat.exists
+  tags: [rollback, system, sysctl, phase0, sysctl_restore_runtime_values]
+
+- name: Remove sysctl baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ sysctl_fact_path }}"
+    state: absent
+  when: sysctl_fact_stat.stat.exists
+  tags: [rollback, system, sysctl, phase0, sysctl_remove_baseline]

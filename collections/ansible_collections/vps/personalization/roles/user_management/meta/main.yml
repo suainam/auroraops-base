@@ -1,0 +1,7 @@
+---
+# Role metadata - declare runtime dependencies so Ansible runs these roles first
+# Use collection-qualified names (FQCN) when referencing roles from the same collection
+# 注意：vim 和 zsh 应该在 user_management 之前部署（为 root 配置）
+# vim 和 zsh 会检查 admin 用户是否存在，如果存在则为其配置
+
+dependencies: []

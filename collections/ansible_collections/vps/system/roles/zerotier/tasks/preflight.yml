@@ -1,0 +1,115 @@
+---
+- name: Check existing zerotier baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zerotier_fact_path }}"
+  register: zerotier_fact_stat
+
+- name: Read existing zerotier baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ zerotier_fact_path }}"
+  register: zerotier_fact_raw
+  when: zerotier_fact_stat.stat.exists
+
+- name: Parse existing zerotier baseline
+  ansible.builtin.set_fact:
+    zerotier_baseline: "{{ zerotier_fact_raw.content | b64decode | from_json }}"
+  when: zerotier_fact_stat.stat.exists
+
+- name: Validate zerotier baseline metadata
+  ansible.builtin.assert:
+    that:
+      - zerotier_baseline.auroraops_managed | default(false) | bool
+      - zerotier_baseline.version | default(0) | int >= 1
+      - zerotier_baseline.package_name == zerotier_package_name
+      - zerotier_baseline.service_name == zerotier_service_name
+      - zerotier_baseline.pre_deploy_package_installed is defined
+      - zerotier_baseline.pre_deploy_service_enabled is defined
+      - zerotier_baseline.pre_deploy_service_running is defined
+      - zerotier_baseline.pre_deploy_repo_exists is defined
+      - zerotier_baseline.pre_deploy_keyring_exists is defined
+      - zerotier_baseline.pre_deploy_moon_json_exists is defined
+      - zerotier_baseline.pre_deploy_moons_dir_exists is defined
+    fail_msg: "Existing zerotier baseline is invalid"
+  when: zerotier_fact_stat.stat.exists
+
+- name: Gather zerotier package facts
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Gather zerotier service facts
+  become: true
+  ansible.builtin.service_facts:
+
+- name: Check zerotier repo state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zerotier_repo_path }}"
+  register: zerotier_repo_stat
+
+- name: Check zerotier keyring state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zerotier_keyring_path }}"
+  register: zerotier_keyring_stat
+
+- name: Check zerotier moon config state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zerotier_moon_json_path }}"
+  register: zerotier_moon_json_stat
+
+- name: Check zerotier moons.d state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zerotier_moons_dir_path }}"
+  register: zerotier_moons_dir_stat
+
+- name: Build zerotier preflight summary
+  ansible.builtin.set_fact:
+    zerotier_preflight:
+      baseline_exists: "{{ zerotier_fact_stat.stat.exists | default(false) }}"
+      package_installed: "{{ ansible_facts.packages[zerotier_package_name] is defined }}"
+      service_enabled: "{{ ansible_facts.services[zerotier_service_name ~ '.service'].status | default('disabled') == 'enabled' }}"
+      service_running: "{{ ansible_facts.services[zerotier_service_name ~ '.service'].state | default('stopped') == 'running' }}"
+      repo_exists: "{{ zerotier_repo_stat.stat.exists | default(false) }}"
+      keyring_exists: "{{ zerotier_keyring_stat.stat.exists | default(false) }}"
+      moon_json_exists: "{{ zerotier_moon_json_stat.stat.exists | default(false) }}"
+      moons_dir_exists: "{{ zerotier_moons_dir_stat.stat.exists | default(false) }}"
+
+- name: Check if proxy is reachable
+  ansible.builtin.wait_for:
+    host: "{{ (proxy_http | default('http://127.0.0.1:80') | urlsplit).hostname }}"
+    port: "{{ (proxy_http | default('http://127.0.0.1:80') | urlsplit).port | default(80) | int }}"
+    timeout: 2
+  register: proxy_reachable_check
+  failed_when: false
+  when:
+    - proxy_enabled | default(false) | bool
+    - proxy_http | default('') | length > 0
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Determine if proxy should be used
+  ansible.builtin.set_fact:
+    zerotier_use_proxy: "{{ proxy_reachable_check is not skipped and (proxy_reachable_check.failed is not defined or not proxy_reachable_check.failed) }}"
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Set dynamic proxy environment fact
+  ansible.builtin.set_fact:
+    zerotier_environment_proxy: "{{ {} if not (zerotier_use_proxy | bool) else {
+      'http_proxy': proxy_http | default(''),
+      'https_proxy': proxy_https | default(''),
+      'HTTP_PROXY': proxy_http | default(''),
+      'HTTPS_PROXY': proxy_https | default('')
+    } }}"
+  tags: [deploy, system, zerotier, phase0]
+
+- name: Check if UFW executable exists
+  become: true
+  ansible.builtin.stat:
+    path: /usr/sbin/ufw
+  register: ufw_stat
+  tags: [deploy, system, zerotier, phase0]
+

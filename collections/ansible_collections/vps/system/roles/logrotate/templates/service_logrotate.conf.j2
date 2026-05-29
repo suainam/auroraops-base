@@ -1,0 +1,19 @@
+# {{ item.name }} logrotate configuration
+{{ item.log_path }} {
+    rotate {{ item.rotate_count | default(7) }}
+    {{ "compress" if item.compress | default(true) }}
+    {{ "delaycompress" if item.delaycompress | default(true) }}
+    {{ "missingok" if item.missingok | default(true) }}
+    {{ "notifempty" if item.notifempty | default(true) }}
+    {{ "create 0640 " ~ item.create_owner ~ " " ~ item.create_group if item.create_owner is defined and item.create_group is defined }}
+    {% if item.prerotate_command is defined %}
+    prerotate
+        {{ item.prerotate_command }}
+    endscript
+    {% endif %}
+    {% if item.postrotate_command is defined %}
+    postrotate
+        {{ item.postrotate_command }}
+    endscript
+    {% endif %}
+}

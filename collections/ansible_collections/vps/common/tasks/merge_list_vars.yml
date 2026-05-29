@@ -1,0 +1,46 @@
+---
+# ===========================================
+# 通用列表变量合并任务
+# ===========================================
+# 用途: 合并 _global, _host, _exclude 后缀的列表变量
+# 
+# 输入参数:
+#   - merge_var_name: 基础变量名（不含后缀）
+#
+# 合并规则:
+#   final = (global + host) - exclude | unique | sort
+#
+# 示例:
+#   - include_tasks: merge_list_vars.yml
+#     vars:
+#       merge_var_name: nginx_sites_to_deploy
+#
+# 结果:
+#   nginx_sites_to_deploy = 
+#     nginx_sites_to_deploy_global + 
+#     nginx_sites_to_deploy_host - 
+#     nginx_sites_to_exclude
+# ===========================================
+
+- name: "合并列表变量: {{ merge_var_name }}"
+  ansible.builtin.set_fact:
+    "{{ merge_var_name }}": >-
+      {{
+        (
+          (lookup('vars', merge_var_name + '_global', default=[]) | default([]))
+          + (lookup('vars', merge_var_name + '_host', default=[]) | default([]))
+        ) | difference(lookup('vars', merge_var_name + '_exclude', default=[]) | default([]))
+        | unique
+        | sort
+      }}
+  tags: [always]
+
+- name: "调试: 显示 {{ merge_var_name }} 合并结果"
+  ansible.builtin.debug:
+    msg:
+      - "Global: {{ lookup('vars', merge_var_name + '_global', default=[]) | default([]) }}"
+      - "Host: {{ lookup('vars', merge_var_name + '_host', default=[]) | default([]) }}"
+      - "Exclude: {{ lookup('vars', merge_var_name + '_exclude', default=[]) | default([]) }}"
+      - "Final: {{ lookup('vars', merge_var_name) }}"
+  when: ansible_verbosity >= 1
+  tags: [always]

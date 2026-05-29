@@ -1,0 +1,4 @@
+---
+- name: Verify managed user_management state
+  ansible.builtin.import_tasks: tasks/verify.yml
+  tags: [verify, personalization, user_management, phase2]

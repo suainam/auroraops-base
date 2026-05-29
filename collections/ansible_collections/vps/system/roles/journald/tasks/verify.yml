@@ -1,0 +1,100 @@
+- name: Check journald baseline presence
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_fact_path }}"
+  register: journald_fact_stat
+  tags: [verify, system, journald, phase0]
+
+- name: Verify journald baseline exists
+  ansible.builtin.assert:
+    that:
+      - journald_fact_stat.stat.exists
+    fail_msg: "Journald baseline is missing; rollback preconditions are not satisfied"
+  tags: [verify, system, journald, phase0, journald_verify_baseline]
+
+- name: Read journald baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ journald_fact_path }}"
+  register: journald_fact_raw
+  tags: [verify, system, journald, phase0]
+
+- name: Parse journald baseline
+  ansible.builtin.set_fact:
+    journald_baseline: "{{ journald_fact_raw.content | b64decode | from_json }}"
+  tags: [verify, system, journald, phase0]
+
+- name: Verify journald baseline metadata
+  ansible.builtin.assert:
+    that:
+      - journald_baseline.auroraops_managed | default(false) | bool
+      - journald_baseline.version | default(0) | int >= 1
+      - journald_baseline.managed_dir == journald_managed_dir
+      - journald_baseline.managed_file == journald_managed_file
+      - journald_baseline.pre_deploy_dir_exists is defined
+      - journald_baseline.pre_deploy_file_exists is defined
+      - journald_baseline.pre_deploy_content is defined
+    fail_msg: "Journald baseline content is invalid"
+  tags: [verify, system, journald, phase0, journald_verify_baseline]
+
+- name: Build expected journald content lines
+  ansible.builtin.set_fact:
+    journald_expected_lines:
+      - "[Journal]"
+      - "SystemMaxUse={{ journald_system_max_use }}"
+      - "RateLimitIntervalSec={{ journald_rate_limit_interval }}"
+      - "RateLimitBurst={{ journald_rate_limit_burst }}"
+      - "Storage={{ journald_storage }}"
+      - "SyncIntervalSec={{ journald_sync_interval }}"
+      - "ForwardToSyslog={{ journald_forward_to_syslog }}"
+  tags: [verify, system, journald, phase0]
+
+- name: Verify journald override directory exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_managed_dir }}"
+  register: journald_managed_dir_stat
+  failed_when: not journald_managed_dir_stat.stat.exists
+  tags: [verify, system, journald, phase0, journald_verify_dir]
+
+- name: Verify managed journald override file exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ journald_managed_file }}"
+  register: journald_managed_file_stat
+  failed_when: not journald_managed_file_stat.stat.exists
+  tags: [verify, system, journald, phase0, journald_verify_file_exists]
+
+- name: Read managed journald override file
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ journald_managed_file }}"
+  register: journald_managed_file_raw
+  tags: [verify, system, journald, phase0, journald_verify_file_content]
+
+- name: Parse managed journald override file
+  ansible.builtin.set_fact:
+    journald_managed_file_content: "{{ journald_managed_file_raw.content | b64decode }}"
+  tags: [verify, system, journald, phase0, journald_verify_file_content]
+
+- name: Assert managed journald content matches desired values
+  ansible.builtin.assert:
+    that:
+      - item in journald_managed_file_content
+    fail_msg: "Managed journald override is missing expected line: {{ item }}"
+  loop: "{{ journald_expected_lines }}"
+  tags: [verify, system, journald, phase0, journald_verify_file_content]
+
+- name: Verify journald disk usage output format
+  become: true
+  ansible.builtin.command: journalctl --disk-usage
+  register: journalctl_disk_usage
+  changed_when: false
+  tags: [verify, system, journald, phase0, journald_verify_size]
+
+- name: Assert journald disk usage output is present
+  ansible.builtin.assert:
+    that:
+      - journalctl_disk_usage.stdout is search('(Archived and active journals take up|Disk usage:) .*')
+    fail_msg: "journalctl disk usage output format is unexpected"
+  tags: [verify, system, journald, phase0, journald_verify_size]

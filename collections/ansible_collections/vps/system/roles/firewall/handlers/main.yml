@@ -1,0 +1,30 @@
+# roles/system-security/firewall/handlers/main.yml
+---
+- name: Reload ufw
+  become: yes
+  community.general.ufw:
+    state: reloaded
+  notify: Restart docker
+  when: not ansible_check_mode  # 在 check 模式下跳过
+
+- name: Restart ufw
+  become: yes
+  ansible.builtin.service:
+    name: ufw
+    state: restarted
+  notify: Restart docker
+  when: not ansible_check_mode  # 在 check 模式下跳过
+
+- name: Restart docker
+  become: yes
+  ansible.builtin.shell: |
+    if systemctl is-active --quiet docker 2>/dev/null; then
+      echo "Restarting docker service..."
+      systemctl restart docker
+    else
+      echo "Docker not running or not installed, skipping restart"
+    fi
+  ignore_errors: yes
+  when: 
+    - not ansible_check_mode
+    - docker_service_installed | default(false) | bool

@@ -1,0 +1,156 @@
+---
+- name: Check existing ssh baseline
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ssh_fact_path }}"
+  register: ssh_fact_stat
+  tags: [deploy, system, ssh, phase1]
+
+- name: Read existing ssh baseline
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ssh_fact_path }}"
+  register: ssh_fact_raw
+  when: ssh_fact_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Parse existing ssh baseline
+  ansible.builtin.set_fact:
+    ssh_baseline: "{{ ssh_fact_raw.content | b64decode | from_json }}"
+  when: ssh_fact_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Validate ssh baseline metadata
+  ansible.builtin.assert:
+    that:
+      - ssh_baseline.auroraops_managed | default(false) | bool
+      - ssh_baseline.version | default(0) | int >= 1
+      - ssh_baseline.main_config_path == ssh_main_config_path
+      - ssh_baseline.managed_dropin_path == ssh_managed_dropin_path
+      - ssh_baseline.pre_deploy_main_content is defined
+      - ssh_baseline.pre_deploy_dropin_content is defined
+      - ssh_baseline.pre_deploy_service_enabled is defined
+      - ssh_baseline.pre_deploy_service_running is defined
+    fail_msg: "Existing ssh baseline is invalid"
+  when: ssh_fact_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Gather package facts for ssh preflight
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [deploy, system, ssh, phase1]
+
+- name: Assert openssh-server is already installed
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.packages[ssh_package_name] is defined
+    fail_msg: "ssh role expects {{ ssh_package_name }} to be preinstalled; bootstrap it before running lifecycle"
+  tags: [deploy, system, ssh, phase1]
+
+- name: Check current ssh main config state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ssh_main_config_path }}"
+  register: ssh_main_config_stat
+  tags: [deploy, system, ssh, phase1]
+
+- name: Read current ssh main config
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ssh_main_config_path }}"
+  register: ssh_main_config_raw
+  when: ssh_main_config_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Check current ssh managed drop-in state
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ssh_managed_dropin_path }}"
+  register: ssh_managed_dropin_stat
+  tags: [deploy, system, ssh, phase1]
+
+- name: Read current ssh managed drop-in
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ssh_managed_dropin_path }}"
+  register: ssh_managed_dropin_raw
+  when: ssh_managed_dropin_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Adopt legacy ssh managed drop-in as rollback baseline
+  ansible.builtin.debug:
+    msg: "Adopting existing {{ ssh_managed_dropin_path }} as pre-deploy baseline because no ssh baseline exists yet."
+  when:
+    - not ssh_fact_stat.stat.exists
+    - ssh_managed_dropin_stat.stat.exists
+  tags: [deploy, system, ssh, phase1]
+
+- name: Gather ssh service facts
+  become: true
+  ansible.builtin.service_facts:
+  tags: [deploy, system, ssh, phase1]
+
+- name: Read effective sshd configuration
+  become: true
+  check_mode: false
+  ansible.builtin.command: sshd -T
+  register: ssh_effective_config
+  changed_when: false
+  tags: [deploy, system, ssh, phase1]
+
+- name: Determine current effective ssh port
+  ansible.builtin.set_fact:
+    ssh_current_effective_port: "{{ (ssh_effective_config.stdout | regex_search('(?m)^port\\s+(\\d+)$', '\\1') | first) | default('22', true) }}"
+    ssh_port_changed: "{{ ((ssh_effective_config.stdout | regex_search('(?m)^port\\s+(\\d+)$', '\\1') | first) | default('22', true)) != (ssh_port | string) }}"
+  tags: [deploy, system, ssh, phase1]
+
+- name: Check whether ufw executable exists
+  become: true
+  check_mode: false
+  ansible.builtin.command: command -v ufw
+  register: ssh_ufw_binary_check
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, ssh, phase1]
+
+- name: Read current ufw status when available
+  become: true
+  check_mode: false
+  ansible.builtin.command: ufw status
+  register: ssh_ufw_status
+  changed_when: false
+  failed_when: false
+  when: ssh_ufw_binary_check.rc == 0
+  tags: [deploy, system, ssh, phase1]
+
+- name: Fail loud when changing ssh port behind active ufw without allow rule
+  ansible.builtin.assert:
+    that:
+      - not ssh_port_changed
+      - >
+        (ssh_ufw_binary_check.rc != 0)
+        or
+        ('Status: active' not in (ssh_ufw_status.stdout | default('')))
+        or
+        ((ssh_ufw_status.stdout | default('') | regex_search((ssh_port | string) ~ '(/tcp)?\\s+ALLOW')) is not none)
+    fail_msg: >-
+      ssh_port is changing from {{ ssh_current_effective_port }} to {{ ssh_port }},
+      but active ufw does not already allow the new port. Run the firewall lifecycle
+      first or pre-open the port before changing ssh.
+  tags: [deploy, system, ssh, phase1]
+
+- name: Build ssh preflight summary
+  ansible.builtin.set_fact:
+    ssh_preflight:
+      baseline_exists: "{{ ssh_fact_stat.stat.exists | default(false) }}"
+      main_config_exists: "{{ ssh_main_config_stat.stat.exists | default(false) }}"
+      main_config_content: "{{ (ssh_main_config_raw.content | b64decode) if (ssh_main_config_raw is defined and ssh_main_config_raw.content is defined) else '' }}"
+      managed_dropin_exists: "{{ ssh_managed_dropin_stat.stat.exists | default(false) }}"
+      managed_dropin_content: "{{ (ssh_managed_dropin_raw.content | b64decode) if (ssh_managed_dropin_raw is defined and ssh_managed_dropin_raw.content is defined) else '' }}"
+      service_enabled: "{{ ansible_facts.services[ssh_service_name ~ '.service'].status | default('enabled') == 'enabled' }}"
+      service_running: "{{ ansible_facts.services[ssh_service_name ~ '.service'].state | default('running') == 'running' }}"
+      effective_config: "{{ ssh_effective_config.stdout }}"
+      current_effective_port: "{{ ssh_current_effective_port }}"
+      port_changed: "{{ ssh_port_changed }}"
+  tags: [deploy, system, ssh, phase1]

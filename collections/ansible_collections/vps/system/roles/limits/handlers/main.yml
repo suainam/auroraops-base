@@ -1,0 +1,7 @@
+---
+# limits 修改后通常需要重新登录才能生效，一般不需要 handler
+# 这里放一个占位，避免 notify 报错
+- name: Dummy handler for limits
+  debug:
+    msg: "limits updated, please re-login to take effect"
+

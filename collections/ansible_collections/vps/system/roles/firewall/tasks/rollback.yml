@@ -1,0 +1,197 @@
+- name: Check firewall baseline presence for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ firewall_fact_path }}"
+  register: firewall_fact_stat
+  tags: [rollback, system, firewall, phase1]
+
+- name: Check current firewall managed directories for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ firewall_managed_dirs }}"
+  register: firewall_managed_dir_stats
+  tags: [rollback, system, firewall, phase1]
+
+- name: Check current firewall managed files for rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ firewall_managed_files }}"
+  register: firewall_managed_file_stats
+  tags: [rollback, system, firewall, phase1]
+
+- name: Refuse rollback without baseline when managed firewall artifacts remain
+  ansible.builtin.fail:
+    msg: "Firewall baseline is missing while managed firewall artifacts still exist"
+  when:
+    - not firewall_fact_stat.stat.exists
+    - >
+      (firewall_managed_dir_stats.results | selectattr('stat.exists') | list | length > 0)
+      or
+      (firewall_managed_file_stats.results | selectattr('stat.exists') | list | length > 0)
+  tags: [rollback, system, firewall, phase1]
+
+- name: No managed firewall state to rollback
+  ansible.builtin.debug:
+    msg: "No firewall baseline and no managed artifacts found, skipping rollback"
+  when:
+    - not firewall_fact_stat.stat.exists
+    - firewall_managed_dir_stats.results | selectattr('stat.exists') | list | length == 0
+    - firewall_managed_file_stats.results | selectattr('stat.exists') | list | length == 0
+  tags: [rollback, system, firewall, phase1]
+
+- name: Read firewall baseline for rollback
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ firewall_fact_path }}"
+  register: firewall_fact_raw
+  when: firewall_fact_stat.stat.exists
+  tags: [rollback, system, firewall, phase1]
+
+- name: Parse firewall baseline for rollback
+  ansible.builtin.set_fact:
+    firewall_baseline: "{{ firewall_fact_raw.content | b64decode | from_json }}"
+  when: firewall_fact_stat.stat.exists
+  tags: [rollback, system, firewall, phase1]
+
+- name: Validate firewall baseline for rollback
+  ansible.builtin.assert:
+    that:
+      - firewall_baseline.auroraops_managed | default(false) | bool
+      - firewall_baseline.version | default(0) | int >= firewall_baseline_version
+      - firewall_baseline.ssh_port == (ssh_port | string)
+      - firewall_baseline.managed_files is defined
+      - firewall_baseline.managed_dirs is defined
+      - firewall_baseline.pre_deploy_managed_files is defined
+      - firewall_baseline.pre_deploy_managed_dirs is defined
+      - firewall_baseline.pre_deploy_ufw_pkg_installed is defined
+      - firewall_baseline.pre_deploy_nftables_pkg_installed is defined
+      - firewall_baseline.pre_deploy_ufw_enabled is defined
+      - firewall_baseline.pre_deploy_sysctl_values is defined
+    fail_msg: "Firewall baseline content is invalid for rollback"
+  when: firewall_fact_stat.stat.exists
+  tags: [rollback, system, firewall, phase1]
+
+- name: Ensure configured SSH port remains allowed before rollback changes
+  become: true
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port | string }}"
+    proto: tcp
+  when:
+    - firewall_fact_stat.stat.exists
+    - firewall_baseline.pre_deploy_ufw_pkg_installed | bool
+  failed_when: false
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore managed firewall directories that existed before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.key }}"
+    state: directory
+    mode: "{{ item.value.mode | default('0755') }}"
+  loop: "{{ (firewall_baseline.pre_deploy_managed_dirs | default({})) | dict2items }}"
+  when:
+    - firewall_fact_stat.stat.exists
+    - item.value.exists | default(false)
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore managed firewall files that existed before deploy
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ item.key }}"
+    content: "{{ item.value.content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ (firewall_baseline.pre_deploy_managed_files | default({})) | dict2items }}"
+  when:
+    - firewall_fact_stat.stat.exists
+    - item.value.exists | default(false)
+  tags: [rollback, system, firewall, phase1]
+
+- name: Remove managed firewall files that were absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.key }}"
+    state: absent
+  loop: "{{ (firewall_baseline.pre_deploy_managed_files | default({})) | dict2items }}"
+  when:
+    - firewall_fact_stat.stat.exists
+    - not (item.value.exists | default(false))
+    - item.key not in ['/etc/ufw/user.rules', '/etc/ufw/user6.rules']
+  tags: [rollback, system, firewall, phase1]
+
+- name: Remove managed firewall directories that were absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.key }}"
+    state: absent
+  loop: "{{ (firewall_baseline.pre_deploy_managed_dirs | default({})) | dict2items }}"
+  when:
+    - firewall_fact_stat.stat.exists
+    - not (item.value.exists | default(false))
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore forwarding sysctl values
+  become: true
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ (firewall_baseline.pre_deploy_sysctl_values | default({})) | dict2items }}"
+  when: firewall_fact_stat.stat.exists
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore nftables package presence when it existed before deploy
+  become: true
+  ansible.builtin.package:
+    name: nftables
+    state: present
+  when:
+    - firewall_fact_stat.stat.exists
+    - firewall_baseline.pre_deploy_nftables_pkg_installed | bool
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore UFW active state when it was enabled before deploy
+  become: true
+  community.general.ufw:
+    state: enabled
+  when:
+    - firewall_fact_stat.stat.exists
+    - firewall_baseline.pre_deploy_ufw_pkg_installed | bool
+    - firewall_baseline.pre_deploy_ufw_enabled | bool
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore UFW inactive state when it was disabled before deploy
+  become: true
+  community.general.ufw:
+    state: disabled
+  when:
+    - firewall_fact_stat.stat.exists
+    - firewall_baseline.pre_deploy_ufw_pkg_installed | bool
+    - not (firewall_baseline.pre_deploy_ufw_enabled | bool)
+  tags: [rollback, system, firewall, phase1]
+
+- name: Restore UFW package absence when it was not installed before deploy
+  become: true
+  ansible.builtin.command:
+    cmd: apt-get remove -y ufw
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when:
+    - firewall_fact_stat.stat.exists
+    - not (firewall_baseline.pre_deploy_ufw_pkg_installed | bool)
+  failed_when: false
+  tags: [rollback, system, firewall, phase1]
+
+- name: Remove firewall baseline after successful rollback
+  become: true
+  ansible.builtin.file:
+    path: "{{ firewall_fact_path }}"
+    state: absent
+  when: firewall_fact_stat.stat.exists
+  tags: [rollback, system, firewall, phase1]
