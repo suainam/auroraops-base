@@ -1,4 +1,9 @@
 repo: auroraops-base
-version: 0.0.0-unreleased
+version: 1.1.0
 compatibility:
-  dependencies: []
+  parent: auroraops-control
+  dependencies:
+    - name: ansible.posix
+      version: "2.1.0"
+    - name: community.general
+      version: "13.1.0"

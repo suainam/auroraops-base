@@ -10,7 +10,7 @@ python_environment_pip_conf_path: /etc/pip.conf
 # 搜索已有的 Bootstrap 环境路径 (仅用于只读探测/诊断)
 bootstrap_venv_search_paths:
   - "/root/.local/pipx/venvs/ansible-core"
-  - "/root/AuroraOps/venv"
+  - "/opt/aurora_venv"
 
 # 历史兼容变量；当前 stateful 流程不再自动接管外部 venv
 python_auto_link_existing_venv: true

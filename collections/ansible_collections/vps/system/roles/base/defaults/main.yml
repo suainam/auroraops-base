@@ -16,3 +16,8 @@ dns_servers:
   - 1.1.1.1  # Cloudflare
   - 8.8.4.4  # Google
   - 1.0.0.1  # Cloudflare
+
+# 验证脚本部署目录
+base_verify_script_dir: /opt/auroraops/scripts
+base_verify_script_path: "{{ base_verify_script_dir }}/verify_phase0.py"
+

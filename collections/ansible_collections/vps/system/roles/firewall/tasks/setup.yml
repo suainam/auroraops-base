@@ -14,7 +14,6 @@
       cmd: nft flush ruleset
     changed_when: true
     ignore_errors: true
-    notify: Restart docker
     tags: [deploy, system, firewall, phase1, firewall_apply]
 
   - name: Read apt sources list for UFW install

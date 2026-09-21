@@ -292,7 +292,7 @@
 - name: Remove verification script from target host
   become: true
   ansible.builtin.file:
-    path: /root/AuroraOps/scripts/verify_phase0.py
+    path: "{{ base_verify_script_path }}"
     state: absent
   tags: [rollback, system, base, base_rollback_cleanup, phase0]
 

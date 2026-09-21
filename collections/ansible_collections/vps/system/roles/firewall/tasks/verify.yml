@@ -91,14 +91,6 @@
   loop: "{{ firewall_effective_udp_ports }}"
   tags: [verify, system, firewall, phase1]
 
-- name: Check if Hysteria Hopping UDP range is allowed
-  ansible.builtin.assert:
-    that:
-      - (firewall_hysteria_hopping.port_range + '/udp') in ufw_status_result.stdout
-    fail_msg: "Hysteria hopping range {{ firewall_hysteria_hopping.port_range }} (UDP) is not allowed"
-  when: firewall_hysteria_hopping.enabled
-  tags: [verify, system, firewall, phase1]
-
 - name: Check current forwarding sysctl values
   become: true
   ansible.builtin.command: "sysctl -n {{ item }}"
@@ -149,20 +141,3 @@
     fail_msg: "/etc/ufw/after.init does not contain managed firewall template content"
   tags: [verify, system, firewall, phase1]
 
-- name: Verify NAT Redirect rule exists
-  become: true
-  ansible.builtin.command: iptables -t nat -L PREROUTING -n
-  register: nat_rules
-  changed_when: false
-  when: firewall_hysteria_hopping.enabled
-  tags: [verify, system, firewall, phase1]
-
-- name: Assert NAT Redirect rule for Hysteria
-  ansible.builtin.assert:
-    that:
-      - "'REDIRECT' in nat_rules.stdout"
-      - "('udp dpts:' + firewall_hysteria_hopping.port_range) in nat_rules.stdout"
-      - "('redir ports ' + firewall_hysteria_hopping.target_port | string) in nat_rules.stdout"
-    fail_msg: "Hysteria NAT redirect rule is missing or incorrect"
-  when: firewall_hysteria_hopping.enabled
-  tags: [verify, system, firewall, phase1]

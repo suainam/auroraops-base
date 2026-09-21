@@ -46,7 +46,3 @@ firewall_allow_tcp_ports:
 
 firewall_allow_udp_ports: []
 
-firewall_hysteria_hopping:
-  enabled: false
-  port_range: "{{ app_port_hysteria_hopping_range }}"
-  target_port: "{{ app_port_singbox_hysteria }}"
