@@ -1,14 +1,15 @@
+---
 - name: 角色启用检查
   ansible.builtin.debug:
     msg: "Role sysctl is disabled, skipping"
   when: not (auroraops_roles['system']['sysctl'] | default(true) | bool)
-  tags: [always, deploy, system, sysctl]
+  tags: [deploy, system, sysctl, phase0]
 
 - name: 角色已启用，执行 Sysctl 任务
   ansible.builtin.debug:
     msg: "Executing sysctl role tasks"
   when: auroraops_roles['system']['sysctl'] | default(true) | bool
-  tags: [always, deploy, system, sysctl]
+  tags: [deploy, system, sysctl, phase0]
 
 - name: Run sysctl preflight
   ansible.builtin.import_tasks: preflight.yml

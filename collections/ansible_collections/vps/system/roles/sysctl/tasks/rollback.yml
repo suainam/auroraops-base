@@ -1,3 +1,4 @@
+---
 - name: Check sysctl baseline presence for rollback
   become: true
   ansible.builtin.stat:
@@ -22,7 +23,16 @@
 
 - name: Parse managed module artifact presence
   ansible.builtin.set_fact:
-    sysctl_managed_module_artifacts_present: "{{ (sysctl_module_file_stats.results | selectattr('stat.exists', 'defined') | selectattr('stat.exists') | list | length) > 0 }}"
+    sysctl_managed_module_artifacts_present: >-
+      {{
+        (
+          sysctl_module_file_stats.results
+          | selectattr('stat.exists', 'defined')
+          | selectattr('stat.exists')
+          | list
+          | length
+        ) > 0
+      }}
   tags: [rollback, system, sysctl, phase0]
 
 - name: Refuse rollback without baseline when managed artifacts remain
@@ -91,6 +101,31 @@
     - not (sysctl_baseline.pre_deploy_sysctl_file_exists | bool)
   tags: [rollback, system, sysctl, phase0, sysctl_remove_managed_file]
 
+- name: Restore previous kernel cmdline content
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ sysctl_baseline.kernel_cmdline_path }}"
+    content: "{{ sysctl_baseline.pre_deploy_kernel_cmdline_content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - sysctl_fact_stat.stat.exists
+    - sysctl_baseline.kernel_cmdline_path | default('') | length > 0
+    - sysctl_baseline.pre_deploy_kernel_cmdline_file_exists | default(false) | bool
+  tags: [rollback, system, sysctl, phase0, sysctl_kernel_cmdline]
+
+- name: Remove kernel cmdline file when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ sysctl_baseline.kernel_cmdline_path }}"
+    state: absent
+  when:
+    - sysctl_fact_stat.stat.exists
+    - sysctl_baseline.kernel_cmdline_path | default('') | length > 0
+    - not (sysctl_baseline.pre_deploy_kernel_cmdline_file_exists | default(false) | bool)
+  tags: [rollback, system, sysctl, phase0, sysctl_kernel_cmdline]
+
 - name: Restore previous module persist files
   become: true
   ansible.builtin.copy:
@@ -121,13 +156,7 @@
   ansible.builtin.command: "sysctl -w {{ item.key }}={{ item.value | quote }}"
   loop: "{{ (sysctl_baseline.pre_deploy_values | default({})) | dict2items }}"
   changed_when: false
-  when: sysctl_fact_stat.stat.exists
+  when:
+    - sysctl_fact_stat.stat.exists
+    - sysctl_runtime_restore_enabled | bool
   tags: [rollback, system, sysctl, phase0, sysctl_restore_runtime_values]
-
-- name: Remove sysctl baseline after successful rollback
-  become: true
-  ansible.builtin.file:
-    path: "{{ sysctl_fact_path }}"
-    state: absent
-  when: sysctl_fact_stat.stat.exists
-  tags: [rollback, system, sysctl, phase0, sysctl_remove_baseline]

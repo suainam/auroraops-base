@@ -1,6 +1,13 @@
+---
 - name: Build desired sysctl plan for verification
   ansible.builtin.import_tasks: build_desired_sysctl.yml
-  tags: [verify, system, sysctl, phase0]
+  tags:
+    - verify
+    - system
+    - sysctl
+    - sysctl_verify_module_persist_config
+    - sysctl_verify_params
+    - phase0
 
 - name: Check sysctl baseline presence
   become: true
@@ -47,11 +54,30 @@
   failed_when: not sysctl_managed_file_stat.stat.exists
   tags: [verify, system, sysctl, phase0, sysctl_verify_file_exists]
 
+- name: Read configured kernel cmdline file for verification
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ sysctl_kernel_cmdline_path }}"
+  register: sysctl_verify_kernel_cmdline_raw
+  when: sysctl_kernel_cmdline_path | length > 0
+  tags: [verify, system, sysctl, phase0, sysctl_kernel_cmdline]
+
+- name: Assert disabled kernel cmdline parameters are absent
+  ansible.builtin.assert:
+    that:
+      - item not in (sysctl_verify_kernel_cmdline_raw.content | b64decode).split()
+    fail_msg: "Disabled kernel cmdline parameter remains: {{ item }}"
+  loop: "{{ sysctl_kernel_cmdline_remove }}"
+  when:
+    - sysctl_kernel_cmdline_path | length > 0
+    - sysctl_kernel_cmdline_remove | length > 0
+  tags: [verify, system, sysctl, phase0, sysctl_kernel_cmdline]
+
 - name: Verify managed module persist files exist
   become: true
   ansible.builtin.stat:
     path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
-  loop: "{{ sysctl_available_modules }}"
+  loop: "{{ sysctl_modules_to_persist }}"
   register: sysctl_module_file_checks
   tags: [verify, system, sysctl, phase0, sysctl_verify_module_persist_config]
 
@@ -63,10 +89,30 @@
   loop: "{{ sysctl_module_file_checks.results }}"
   tags: [verify, system, sysctl, phase0, sysctl_verify_module_persist_config]
 
+- name: Verify unselected module persist files are absent
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
+  loop: "{{ sysctl_managed_modules | difference(sysctl_modules_to_persist) }}"
+  register: sysctl_unselected_module_file_checks
+  tags: [verify, system, sysctl, phase0, sysctl_verify_module_persist_config]
+
+- name: Assert unselected module persist files are absent
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.exists | default(false))
+    fail_msg: "Unselected module persist file still exists: 99-auroraops-{{ item.item }}.conf"
+  loop: "{{ sysctl_unselected_module_file_checks.results }}"
+  tags: [verify, system, sysctl, phase0, sysctl_verify_module_persist_config]
+
 - name: Read applied sysctl parameters
   become: true
-  ansible.builtin.shell: "sysctl -n {{ item.key }} | tr '\t' ' ' | xargs"
-  loop: "{{ final_sysctl_params | dict2items }}"
+  ansible.builtin.command:
+    argv:
+      - sysctl
+      - -n
+      - "{{ item.key }}"
+  loop: "{{ sysctl_final_sysctl_params | dict2items }}"
   register: sysctl_param_check
   changed_when: false
   tags: [verify, system, sysctl, phase0, sysctl_verify_params]
@@ -74,7 +120,12 @@
 - name: Assert sysctl parameters match desired values
   ansible.builtin.assert:
     that:
-      - item.item.value | string == item.stdout | trim
-    fail_msg: "Sysctl value mismatch for {{ item.item.key }} (expected {{ item.item.value }}, got {{ item.stdout | trim }})"
+      - >-
+        item.item.value | string
+        == item.stdout | regex_replace('[\\t ]+', ' ') | trim
+    fail_msg: >-
+      Sysctl value mismatch for {{ item.item.key }}
+      (expected {{ item.item.value }}, got
+      {{ item.stdout | regex_replace('[\\t ]+', ' ') | trim }})
   loop: "{{ sysctl_param_check.results }}"
   tags: [verify, system, sysctl, phase0, sysctl_verify_params]

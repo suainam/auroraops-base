@@ -1,3 +1,4 @@
+---
 - name: Build desired sysctl plan
   ansible.builtin.import_tasks: build_desired_sysctl.yml
   tags: [deploy, system, sysctl, phase0]
@@ -42,6 +43,40 @@
   register: sysctl_managed_file_stat
   tags: [deploy, system, sysctl, phase0]
 
+- name: Check configured kernel cmdline file
+  become: true
+  ansible.builtin.stat:
+    path: "{{ sysctl_kernel_cmdline_path }}"
+  register: sysctl_kernel_cmdline_file_stat
+  when: sysctl_kernel_cmdline_path | length > 0
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Require configured kernel cmdline file
+  ansible.builtin.assert:
+    that:
+      - sysctl_kernel_cmdline_file_stat.stat.exists | default(false)
+    fail_msg: "Configured kernel cmdline file is missing: {{ sysctl_kernel_cmdline_path }}"
+  when: sysctl_kernel_cmdline_path | length > 0
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Read configured kernel cmdline file
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ sysctl_kernel_cmdline_path }}"
+  register: sysctl_kernel_cmdline_file_raw
+  when:
+    - sysctl_kernel_cmdline_path | length > 0
+    - sysctl_kernel_cmdline_file_stat.stat.exists | default(false)
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Parse configured kernel cmdline file
+  ansible.builtin.set_fact:
+    sysctl_kernel_cmdline_content: "{{ sysctl_kernel_cmdline_file_raw.content | b64decode }}"
+  when:
+    - sysctl_kernel_cmdline_path | length > 0
+    - sysctl_kernel_cmdline_file_stat.stat.exists | default(false)
+  tags: [deploy, system, sysctl, phase0]
+
 - name: Read current managed sysctl file
   become: true
   ansible.builtin.slurp:
@@ -62,7 +97,7 @@
   become: true
   ansible.builtin.stat:
     path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
-  loop: "{{ sysctl_available_modules }}"
+  loop: "{{ sysctl_managed_modules }}"
   register: sysctl_module_file_stats
   tags: [deploy, system, sysctl, phase0]
 
@@ -79,14 +114,24 @@
   become: true
   check_mode: false
   ansible.builtin.command: "sysctl -n {{ item.key }}"
-  loop: "{{ final_sysctl_params | dict2items }}"
-  register: current_sysctl_value_checks
+  loop: "{{ sysctl_final_sysctl_params | dict2items }}"
+  register: sysctl_current_sysctl_value_checks
   changed_when: false
   tags: [deploy, system, sysctl, phase0]
 
 - name: Assemble current sysctl values
   ansible.builtin.set_fact:
-    current_sysctl_values: "{{ dict(current_sysctl_value_checks.results | map(attribute='item.key') | zip(current_sysctl_value_checks.results | map(attribute='stdout'))) }}"
+    sysctl_current_sysctl_values: >-
+      {{
+        dict(
+          sysctl_current_sysctl_value_checks.results
+          | map(attribute='item.key')
+          | zip(
+              sysctl_current_sysctl_value_checks.results
+              | map(attribute='stdout')
+            )
+        )
+      }}
   tags: [deploy, system, sysctl, phase0]
 
 - name: Read current module persist file contents
@@ -100,9 +145,9 @@
 
 - name: Assemble current module persist baseline
   ansible.builtin.set_fact:
-    current_module_file_baseline: >-
+    sysctl_current_module_file_baseline: >-
       {{
-        current_module_file_baseline | default({}) |
+        sysctl_current_module_file_baseline | default({}) |
         combine({
           item.item.item: {
             'path': item.item.stat.path,
@@ -117,9 +162,9 @@
 
 - name: Fill absent module persist baseline
   ansible.builtin.set_fact:
-    current_module_file_baseline: >-
+    sysctl_current_module_file_baseline: >-
       {{
-        current_module_file_baseline | default({}) |
+        sysctl_current_module_file_baseline | default({}) |
         combine({
           item.item: {
             'path': sysctl_module_persist_dir ~ '/99-auroraops-' ~ item.item ~ '.conf',
@@ -133,5 +178,9 @@
 
 - name: Debug sysctl decision
   ansible.builtin.debug:
-    msg: "ManagedKeys={{ final_sysctl_params.keys() | list | length }} AvailableModules={{ sysctl_available_modules | join(',') }} BaselineExists={{ sysctl_fact_stat.stat.exists }} CheckMode={{ ansible_check_mode }}"
+    msg: >-
+      ManagedKeys={{ sysctl_final_sysctl_params.keys() | list | length }}
+      AvailableModules={{ sysctl_available_modules | join(',') }}
+      BaselineExists={{ sysctl_fact_stat.stat.exists }}
+      CheckMode={{ ansible_check_mode }}
   tags: [deploy, system, sysctl, phase0]

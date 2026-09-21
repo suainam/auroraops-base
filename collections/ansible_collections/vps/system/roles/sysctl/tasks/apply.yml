@@ -1,3 +1,4 @@
+---
 - name: Ensure facts.d directory exists for sysctl baseline
   become: true
   ansible.builtin.file:
@@ -17,22 +18,110 @@
           "auroraops_managed": true,
           "version": 1,
           "sysctl_managed_file": sysctl_managed_file,
-          "pre_deploy_sysctl_file_exists": sysctl_managed_file_stat.stat.exists | default(false),
-          "pre_deploy_sysctl_file_content": (sysctl_managed_file_raw.content | b64decode) if (sysctl_managed_file_stat.stat.exists | default(false)) else '',
-          "pre_deploy_values": current_sysctl_values,
-          "pre_deploy_loaded_modules": sysctl_loaded_modules_before,
-          "pre_deploy_module_files": current_module_file_baseline | default({})
-        } | to_nice_json
-      }}
+          "pre_deploy_sysctl_file_exists": (
+            sysctl_managed_file_stat.stat.exists | default(false)
+          ),
+          "pre_deploy_sysctl_file_content": (
+            (sysctl_managed_file_raw.content | b64decode)
+            if (sysctl_managed_file_stat.stat.exists | default(false))
+            else ''
+          ),
+          "pre_deploy_values": sysctl_current_sysctl_values,
+            "pre_deploy_loaded_modules": sysctl_loaded_modules_before,
+            "pre_deploy_module_files": sysctl_current_module_file_baseline | default({}),
+            "kernel_cmdline_path": sysctl_kernel_cmdline_path,
+            "pre_deploy_kernel_cmdline_file_exists": sysctl_kernel_cmdline_file_stat.stat.exists | default(false),
+            "pre_deploy_kernel_cmdline_content": sysctl_kernel_cmdline_content | default('')
+          } | to_nice_json
+        }}
   when: not sysctl_fact_stat.stat.exists
   tags: [deploy, system, sysctl, phase0]
 
-- name: Load available kernel modules
+- name: Remove disabled kernel cmdline parameters
   become: true
-  ansible.builtin.modprobe:
+  ansible.builtin.copy:
+    dest: "{{ sysctl_kernel_cmdline_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ (sysctl_kernel_cmdline_content.split() | reject('in', sysctl_kernel_cmdline_remove) | list | join(' ')) ~ '\n' }}"
+  when:
+    - sysctl_kernel_cmdline_path | length > 0
+    - sysctl_kernel_cmdline_remove | length > 0
+    - sysctl_kernel_cmdline_file_stat.stat.exists | default(false)
+  tags: [deploy, system, sysctl, phase0, sysctl_kernel_cmdline]
+
+- name: Load candidate kernel modules
+  become: true
+  community.general.modprobe:
     name: "{{ item }}"
     state: present
   loop: "{{ sysctl_available_modules }}"
+  failed_when: false
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Query post-probe registered congestion control algorithms
+  check_mode: false
+  ansible.builtin.command: sysctl -n net.ipv4.tcp_available_congestion_control
+  register: sysctl__post_probe_avail_cc
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Update registered CC algorithm facts
+  ansible.builtin.set_fact:
+    sysctl_registered_cc_algorithms: "{{ (sysctl__post_probe_avail_cc.stdout | default('')).split() }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Fail on explicit unsupported congestion control algorithm
+  ansible.builtin.fail:
+    msg: >-
+      Explicit congestion control algorithm '{{ sysctl_tcp_congestion_control }}'
+      is not supported by the target kernel (registered: {{ sysctl_registered_cc_algorithms | join(', ') }}).
+      Explicit algorithm selection is fail-closed and cannot fallback silently.
+  when:
+    - sysctl_tcp_congestion_control != 'auto'
+    - sysctl_tcp_congestion_control not in sysctl_registered_cc_algorithms
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Re-resolve effective congestion control algorithm
+  ansible.builtin.set_fact:
+    sysctl_resolved_cc: >-
+      {{
+        'bbr'
+        if (sysctl_tcp_congestion_control == 'auto' and ('bbr' in sysctl_registered_cc_algorithms))
+        else (
+          sysctl_tcp_congestion_control
+          if sysctl_tcp_congestion_control != 'auto'
+          else sysctl_active_cc_algorithm
+        )
+      }}
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Re-calculate managed modules to persist
+  ansible.builtin.set_fact:
+    sysctl_modules_to_persist: >-
+      {{
+        (
+          ['nf_conntrack'] if ('nf_conntrack' in sysctl_available_modules) else []
+        )
+        +
+        (
+          ['tcp_bbr'] if (sysctl_resolved_cc == 'bbr' and 'tcp_bbr' in sysctl_available_modules) else []
+        )
+        +
+        (
+          ['tcp_bbr2'] if (sysctl_resolved_cc == 'bbr2' and 'tcp_bbr2' in sysctl_available_modules) else []
+        )
+      }}
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Prune unselected managed kernel module persist files
+  become: true
+  ansible.builtin.file:
+    path: "{{ sysctl_module_persist_dir }}/99-auroraops-{{ item }}.conf"
+    state: absent
+  loop: "{{ sysctl_managed_modules | difference(sysctl_modules_to_persist) }}"
   tags: [deploy, system, sysctl, phase0]
 
 - name: Persist managed kernel modules
@@ -43,7 +132,19 @@
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ sysctl_available_modules }}"
+  loop: "{{ sysctl_modules_to_persist }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Update final sysctl params with resolved congestion control
+  ansible.builtin.set_fact:
+    sysctl_final_sysctl_params: >-
+      {{
+        sysctl_final_sysctl_params
+        | combine({'net.ipv4.tcp_congestion_control': sysctl_resolved_cc})
+      }}
+  when:
+    - sysctl_resolved_cc is defined
+    - (sysctl_resolved_cc | string | length) > 0
   tags: [deploy, system, sysctl, phase0]
 
 - name: Write managed sysctl file
@@ -55,8 +156,8 @@
     mode: "0644"
     content: |
       # Managed by AuroraOps: system.sysctl
-      {% for item in final_sysctl_params | dict2items %}
-      {{ item.key }} = {{ item.value }}
+      {% for item in sysctl_final_sysctl_params | dict2items %}
+      {{ item.key }}={{ item.value }}
       {% endfor %}
   tags: [deploy, system, sysctl, phase0]
 
@@ -64,4 +165,47 @@
   become: true
   ansible.builtin.command: "sysctl -p {{ sysctl_managed_file }}"
   changed_when: false
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Apply managed sysctl values explicitly for BusyBox compatibility
+  become: true
+  ansible.builtin.command:
+    argv:
+      - sysctl
+      - -w
+      - "{{ item.key }}={{ item.value }}"
+  loop: "{{ sysctl_final_sysctl_params | dict2items }}"
+  register: sysctl_runtime_apply
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Assert managed sysctl values were accepted
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+    fail_msg: >-
+      Target rejected sysctl {{ item.item.key }}={{ item.item.value }}:
+      {{ item.stderr | default(item.stdout) | trim }}
+  loop: "{{ sysctl_runtime_apply.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+  tags: [deploy, system, sysctl, phase0]
+
+- name: Reset legacy buffer overrides when safe profile is active
+  become: true
+  ansible.builtin.command: >-
+    sysctl -w
+    net.core.rmem_max=212992
+    net.core.wmem_max=212992
+    net.ipv4.tcp_rmem='4096 87380 6291456'
+    net.ipv4.tcp_wmem='4096 16384 4194304'
+  when:
+    - sysctl_network_profile == 'safe'
+    - (
+        (sysctl_baseline.pre_deploy_values['net.core.rmem_max'] | default('')) == '33554432'
+        or (sysctl_baseline.pre_deploy_values['net.ipv4.tcp_rmem'] | default('')) == '4096 87380 33554432'
+      )
+  changed_when: false
+  failed_when: false
   tags: [deploy, system, sysctl, phase0]
