@@ -1,0 +1,280 @@
+---
+# 启用控制变量: auroraops_roles['personalization']['zsh'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role zsh is disabled, skipping"
+  when: not (auroraops_roles['personalization']['zsh'] | default(true) | bool)
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 角色已启用，执行 Zsh 任务
+  ansible.builtin.debug:
+    msg: "Executing zsh role tasks"
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 检查 zsh 是否已安装
+  ansible.builtin.command: which zsh
+  become: true
+  register: zsh_check
+  changed_when: false
+  failed_when: false
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 安装 zsh 和 lua (Debian/Ubuntu)
+  become: true
+  ansible.builtin.apt:
+    name:
+      - zsh
+      - lua5.4
+    state: present
+    update_cache: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  notify: "设置用户 shell 为 zsh"
+  when:
+    - auroraops_roles['personalization']['zsh'] | default(true) | bool
+    - (ansible_facts.distribution | default(ansible_distribution | default('Debian'))) != 'Alpine'
+  tags: [deploy, personalization, zsh, zsh_install, phase2]
+
+- name: 安装 zsh 和 lua (Alpine)
+  become: true
+  community.general.apk:
+    name:
+      - zsh
+      - lua5.4
+      - git
+      - curl
+      - ca-certificates
+    state: present
+    update_cache: "{{ not ansible_check_mode }}"
+  notify: "设置用户 shell 为 zsh"
+  when:
+    - auroraops_roles['personalization']['zsh'] | default(true) | bool
+    - (ansible_facts.distribution | default(ansible_distribution | default('Debian'))) == 'Alpine'
+  tags: [deploy, personalization, zsh, zsh_install, phase2]
+- name: 确保 root shell 配置为 zsh
+  become: true
+  ansible.builtin.user:
+    name: root
+    shell: "{{ zsh_path | default('/bin/zsh') }}"
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, zsh_set_shell, phase2]
+
+- name: Read root shell after Alpine user module update
+  become: true
+  ansible.builtin.command: getent passwd root
+  register: zsh_root_passwd
+  changed_when: false
+  when:
+    - auroraops_roles['personalization']['zsh'] | default(true) | bool
+    - (ansible_facts.distribution | default(ansible_distribution | default('Debian'))) == 'Alpine'
+  tags: [deploy, personalization, zsh, zsh_set_shell, phase2]
+
+- name: Ensure Alpine root shell with usermod fallback
+  become: true
+  ansible.builtin.command:
+    argv:
+      - usermod
+      - -s
+      - "{{ zsh_path | default('/bin/zsh') }}"
+      - root
+  when:
+    - auroraops_roles['personalization']['zsh'] | default(true) | bool
+    - (ansible_facts.distribution | default(ansible_distribution | default('Debian'))) == 'Alpine'
+    - zsh_root_passwd.stdout.split(':')[-1] != (zsh_path | default('/bin/zsh'))
+  changed_when: true
+  tags: [deploy, personalization, zsh, zsh_set_shell, phase2]
+
+- name: 设置当前用户名
+  ansible.builtin.set_fact:
+    zsh_current_user_name: "{{ ansible_user | default(lookup('env', 'USER')) }}"
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 检查用户是否存在
+  ansible.builtin.shell: "id -u {{ item }} 2>/dev/null || echo not_found"
+  loop:
+    - "{{ admin_user }}"
+    - "{{ zsh_current_user_name }}"
+  register: zsh_user_check_results
+  check_mode: false
+  changed_when: false
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 设置用户存在状态变量
+  ansible.builtin.set_fact:
+    zsh_admin_user_exists: "{{ (zsh_user_check_results.results[0].stdout | default('')) != 'not_found' }}"
+    zsh_current_user_exists: "{{ (zsh_user_check_results.results[1].stdout | default('')) != 'not_found' }}"
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 获取用户主组
+  ansible.builtin.user:
+    name: "{{ item }}"
+  become: true
+  register: zsh_user_info
+  loop:
+    - root
+    - "{{ admin_user }}"
+    - "{{ zsh_current_user_name }}"
+  changed_when: false
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 提取用户主组
+  ansible.builtin.set_fact:
+    zsh_root_group: "{{ zsh_user_info.results[0].group }}"
+    zsh_admin_group: "{{ zsh_user_info.results[1].group if zsh_user_info.results[1].uid is defined else admin_user }}"
+    zsh_current_user_group: "{{ zsh_user_info.results[2].group if zsh_user_info.results[2].uid is defined else zsh_current_user_name }}"
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 安装 Zinit (root)
+  ansible.builtin.shell: |
+    mkdir -p /root/.local/share
+    if [ ! -d /root/.local/share/zinit/zinit.git ]; then
+      git clone https://github.com/zdharma-continuum/zinit.git /root/.local/share/zinit/zinit.git
+    fi
+  args:
+    creates: /root/.local/share/zinit/zinit.git/zinit.zsh
+  environment:
+    http_proxy: "{{ proxy_http | default('') }}"
+    https_proxy: "{{ proxy_https | default('') }}"
+  become: true
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 配置 git safe.directory (admin)
+  become: true
+  become_user: "{{ admin_user }}"
+  community.general.git_config:
+    name: safe.directory
+    scope: global
+    value: "*"
+    add_mode: add
+  when: zsh_admin_user_exists | bool and (auroraops_roles['personalization']['zsh'] | default(true) | bool)
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: Ensure Zinit parent directory exists for admin
+  become: true
+  ansible.builtin.file:
+    path: "/home/{{ admin_user }}/.local/share/zinit"
+    state: directory
+    owner: "{{ admin_user }}"
+    group: "{{ zsh_admin_group }}"
+    mode: "0755"
+  when: zsh_admin_user_exists | bool and (auroraops_roles['personalization']['zsh'] | default(true) | bool)
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 安装 Zinit (admin)
+  become: true
+  become_user: "{{ admin_user }}"
+  ansible.builtin.git:
+    repo: https://github.com/zdharma-continuum/zinit.git
+    dest: "/home/{{ admin_user }}/.local/share/zinit/zinit.git"
+    version: main
+  environment:
+    http_proxy: "{{ proxy_http | default('') }}"
+    https_proxy: "{{ proxy_https | default('') }}"
+  when: zsh_admin_user_exists | bool and (auroraops_roles['personalization']['zsh'] | default(true) | bool)
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 部署 Powerlevel10k 配置 (root)
+  become: true
+  ansible.builtin.copy:
+    src: p10k.zsh
+    dest: /root/.p10k.zsh
+    owner: root
+    group: "{{ zsh_root_group }}"
+    mode: "0600"
+  when: auroraops_roles['personalization']['zsh'] | default(true) | bool
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 部署 Powerlevel10k 配置 (admin)
+  become: true
+  ansible.builtin.copy:
+    src: p10k.zsh
+    dest: "/home/{{ admin_user }}/.p10k.zsh"
+    owner: "{{ admin_user }}"
+    group: "{{ zsh_admin_group }}"
+    mode: "0600"
+  when: zsh_admin_user_exists | bool and (auroraops_roles['personalization']['zsh'] | default(true) | bool)
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: 部署 zsh 配置文件
+  become: true
+  ansible.builtin.template:
+    src: "{{ item.file }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ item.user }}"
+    group: "{{ item.group }}"
+    mode: "0600"
+  loop:
+    - { file: bash_profile.j2, dest: /root/.bash_profile, user: root, group: "{{ zsh_root_group }}" }
+    - { file: zshenv.j2, dest: /root/.zshenv, user: root, group: "{{ zsh_root_group }}" }
+    - { file: zprofile.j2, dest: /root/.zprofile, user: root, group: "{{ zsh_root_group }}" }
+    - { file: zshrc.j2, dest: /root/.zshrc, user: root, group: "{{ zsh_root_group }}" }
+    - { file: shell_env.j2, dest: /root/.shell_env, user: root, group: "{{ zsh_root_group }}" }
+    - file: bash_profile.j2
+      dest: "/home/{{ admin_user }}/.bash_profile"
+      user: "{{ admin_user }}"
+      group: "{{ zsh_admin_group }}"
+      when: "{{ zsh_admin_user_exists }}"
+    - file: zshenv.j2
+      dest: "/home/{{ admin_user }}/.zshenv"
+      user: "{{ admin_user }}"
+      group: "{{ zsh_admin_group }}"
+      when: "{{ zsh_admin_user_exists }}"
+    - file: zprofile.j2
+      dest: "/home/{{ admin_user }}/.zprofile"
+      user: "{{ admin_user }}"
+      group: "{{ zsh_admin_group }}"
+      when: "{{ zsh_admin_user_exists }}"
+    - file: zshrc.j2
+      dest: "/home/{{ admin_user }}/.zshrc"
+      user: "{{ admin_user }}"
+      group: "{{ zsh_admin_group }}"
+      when: "{{ zsh_admin_user_exists }}"
+    - file: shell_env.j2
+      dest: "/home/{{ admin_user }}/.shell_env"
+      user: "{{ admin_user }}"
+      group: "{{ zsh_admin_group }}"
+      when: "{{ zsh_admin_user_exists }}"
+    - file: bash_profile.j2
+      dest: "/home/{{ zsh_current_user_name }}/.bash_profile"
+      user: "{{ zsh_current_user_name }}"
+      group: "{{ zsh_current_user_group }}"
+      when: "{{ zsh_current_user_exists and zsh_current_user_name != 'root' }}"
+    - file: zshenv.j2
+      dest: "/home/{{ zsh_current_user_name }}/.zshenv"
+      user: "{{ zsh_current_user_name }}"
+      group: "{{ zsh_current_user_group }}"
+      when: "{{ zsh_current_user_exists and zsh_current_user_name != 'root' }}"
+    - file: zprofile.j2
+      dest: "/home/{{ zsh_current_user_name }}/.zprofile"
+      user: "{{ zsh_current_user_name }}"
+      group: "{{ zsh_current_user_group }}"
+      when: "{{ zsh_current_user_exists and zsh_current_user_name != 'root' }}"
+    - file: zshrc.j2
+      dest: "/home/{{ zsh_current_user_name }}/.zshrc"
+      user: "{{ zsh_current_user_name }}"
+      group: "{{ zsh_current_user_group }}"
+      when: "{{ zsh_current_user_exists and zsh_current_user_name != 'root' }}"
+    - file: shell_env.j2
+      dest: "/home/{{ zsh_current_user_name }}/.shell_env"
+      user: "{{ zsh_current_user_name }}"
+      group: "{{ zsh_current_user_group }}"
+      when: "{{ zsh_current_user_exists and zsh_current_user_name != 'root' }}"
+  when: (item.when is not defined or item.when | bool) and (auroraops_roles['personalization']['zsh'] | default(true) | bool)
+  loop_control:
+    label: "{{ item.dest }}"
+  tags: [deploy, personalization, zsh, phase2]
+
+- name: Include verification tasks
+  ansible.builtin.import_tasks: verify.yml
+  when: "'verify' in ansible_run_tags and (auroraops_roles['personalization']['zsh'] | default(true) | bool)"
+  tags: [deploy, verify, personalization, zsh, phase2]

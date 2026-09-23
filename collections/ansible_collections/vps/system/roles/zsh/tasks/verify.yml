@@ -1,0 +1,42 @@
+---
+- name: 验证 zsh 已安装
+  ansible.builtin.command: which zsh
+  changed_when: false
+  tags: [verify, personalization, zsh, zsh_verify_package, phase2]
+
+- name: 验证 root shell 为 zsh
+  ansible.builtin.command: getent passwd root
+  register: zsh_verify_root_passwd
+  changed_when: false
+  failed_when: zsh_verify_root_passwd.stdout.split(':')[-1] != (zsh_path | default('/bin/zsh'))
+  tags: [verify, personalization, zsh, zsh_verify_root_shell, phase2]
+
+- name: 验证 Zinit 已安装
+  ansible.builtin.stat:
+    path: /root/.local/share/zinit/zinit.git
+  register: zsh_zinit_check
+  failed_when: not zsh_zinit_check.stat.exists
+  tags: [verify, personalization, zsh, zsh_verify_zinit, phase2]
+
+- name: 验证 .zshrc 存在
+  ansible.builtin.stat:
+    path: /root/.zshrc
+  register: zsh_zshrc_check
+  failed_when: not zsh_zshrc_check.stat.exists
+  tags: [verify, personalization, zsh, zsh_verify_zshrc, phase2]
+
+- name: 验证 .zprofile 包含 ZINIT_HOME
+  ansible.builtin.command: grep 'ZINIT_HOME' /root/.zprofile
+  changed_when: false
+  tags: [verify, personalization, zsh, zsh_verify_zprofile, phase2]
+
+  # - name: 验证 .zshrc 可以正常加载
+  #   ansible.builtin.shell: |
+  #     zsh -c 'source ~/.zshenv && source ~/.zprofile && source ~/.zshrc && echo "ZSH_OK"' 2>/dev/null
+  #   args:
+  #     chdir: /tmp
+  #   become: true
+  #   register: zshrc_source_test
+  #   failed_when: zshrc_source_test.rc != 0 or zshrc_source_test.stdout is not search('ZSH_OK')
+  #   changed_when: false
+  #   tags: [verify, personalization, zsh, zsh_verify_zshrc_load, phase2]

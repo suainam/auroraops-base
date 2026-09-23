@@ -1,0 +1,150 @@
+[[ $- != *i* ]] && return
+
+# Zshrc - Loaded in all zsh shells (interactive and login)
+# This file is the main configuration file for zsh
+
+# Shared environment (proxy, nvm, conda, pipx, base vars)
+[[ -f ~/.shell_env ]] && source ~/.shell_env
+
+# Fix: Prevent glob pattern errors when sourcing .zshrc multiple times
+setopt NO_NOMATCH
+
+# Initialize Zinit if not installed
+ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
+if [[ ! -f $ZINIT_HOME/zinit.zsh ]]; then
+    command mkdir -p "${ZINIT_HOME%/*}"
+    command git clone https://github.com/zdharma-continuum/zinit.git "$ZINIT_HOME"
+fi
+source "$ZINIT_HOME/zinit.zsh"
+autoload -Uz _zinit
+(( ${+_comps} )) && _comps[zinit]=_zinit
+
+# Load a few important annexes, without Turbo
+zinit light-mode for \
+    zdharma-continuum/zinit-annex-as-monitor \
+    zdharma-continuum/zinit-annex-bin-gem-node \
+    zdharma-continuum/zinit-annex-patch-dl \
+    zdharma-continuum/zinit-annex-rust
+
+# OMZ 基础库
+zinit snippet OMZ::lib/completion.zsh
+zinit snippet OMZ::lib/history.zsh
+zinit snippet OMZ::lib/key-bindings.zsh
+zinit snippet OMZ::lib/theme-and-appearance.zsh
+zinit snippet OMZ::plugins/colored-man-pages/colored-man-pages.plugin.zsh
+zinit snippet OMZP::command-not-found
+zinit snippet OMZP::extract
+zinit snippet OMZP::git
+
+# Powerlevel10k Theme
+zinit ice depth=1
+zinit light romkatv/powerlevel10k
+
+# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+
+# --- Turbo Mode (Lazy Loading) ---
+
+# Highlighting, Autosuggestions, Substring Search (Async)
+zinit wait lucid for \
+    atload"bindkey '^[[A' history-substring-search-up; bindkey '^[[B' history-substring-search-down; bindkey \"$terminfo[kcuu1]\" history-substring-search-up; bindkey \"$terminfo[kcud1]\" history-substring-search-down" \
+    zsh-users/zsh-history-substring-search
+
+zinit wait lucid for \
+    atload"_zsh_autosuggest_start" \
+    zsh-users/zsh-autosuggestions \
+    skywind3000/z.lua
+
+# Syntax highlighting should be loaded after other plugins that define widgets
+zinit wait lucid for \
+    zdharma-continuum/fast-syntax-highlighting
+
+# Vi Mode
+zinit wait lucid for jeffreytse/zsh-vi-mode
+
+# Completions
+zinit wait lucid for \
+ atinit"ZINIT[COMPINIT_OPTS]=-C; zicompinit; zicdreplay" \
+    zsh-users/zsh-completions
+
+# --- Configuration ---
+
+# Common Aliases (bash compatible)
+alias ls='ls --color=auto'
+alias ll='ls -AFhlt'
+alias la='ll'
+alias tree='tree -C --dirsfirst'
+alias cls='clear'
+alias ping='ping -c 5'
+alias ports='netstat -tulanp'
+alias sj='date +"%Y-%m-%d %T"'
+alias grc1="grep -inrE -C1 --color=auto"
+alias grc2="grep -inrE -C2 --color=auto"
+alias grp="grep -inrE --color=auto"
+alias rsync-copy="rsync -avz --progress -h"
+alias rsync-move="rsync -avz --progress -h --remove-source-files"
+alias rsync-update="rsync -avzu --progress -h"
+alias rsync-synchronize="rsync -avzu --delete --progress -h"
+alias rsync-move-nas="rsync -avz --progress -h --remove-source-files -e 'ssh -p xxx -i ~/.ssh/nas/pve_rasp_id_rsa'"
+alias cip="curl cip.cc"
+
+# sudoctl 函数 - 多IP + 自动检测 + 日志
+sudoctl() {
+  local file="/etc/sudoers.d/99-suai-nopasswd-ip"
+  local fixed_ips=("192.168.31.181" "192.168.31.192")
+  local target_ip target_host log_file="$HOME/.sudoctl.log"
+
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    if uname -r | grep -qi WSL2; then
+      target_ip=$(ip route show | awk '/^default/ {print $3}')
+    else
+      target_ip="127.0.0.1"
+    fi
+  elif [[ -n "$SSH_CONNECTION" ]]; then
+    target_ip=$(echo $SSH_CONNECTION | awk '{print $1}')
+  else
+    target_ip="127.0.0.1"
+  fi
+
+  target_host=$(hostname)
+
+  case "$1" in
+    on)
+      local all_entries=("${fixed_ips[@]}" "$target_ip" "$target_host")
+      local uniq_entries_csv
+      uniq_entries_csv=$(printf "%s\n" "${all_entries[@]}" | sort -u | paste -sd, -)
+      sudo bash -c "echo 'Host_Alias TRUSTED_HOSTS = ${uniq_entries_csv}' > $file && \
+                    echo 'suai TRUSTED_HOSTS=(ALL) NOPASSWD: ALL' >> $file"
+      if sudo visudo -cf $file >/dev/null; then
+        echo "$(date '+%F %T') | $USER | Entries: ${uniq_entries_csv}" >> "$log_file"
+        sudo -k
+      fi
+      ;;
+    off)
+      sudo rm -f $file && echo "[sudoctl] 已关闭免密"
+      echo "$(date '+%F %T') | $USER | 已关闭免密" >> "$log_file"
+      sudo -k
+      ;;
+    show)
+      sudo cat $file 2>/dev/null || echo "[sudoctl] 当前无免密配置"
+      ;;
+    log)
+      tail -n 10 "$log_file" 2>/dev/null || echo "[sudoctl] 暂无日志记录"
+      ;;
+    *)
+      echo "用法: sudoctl on | off | show | log"
+      ;;
+  esac
+}
+
+# User Local Configuration (Overrides)
+source ~/.zshrc.local 2>/dev/null || true
+
+# OpenClaw Completion (only in interactive shells with compdef available)
+# Strip ANSI codes and filter plugin logs to avoid glob pattern errors
+if [[ -o interactive ]] && (( $+commands[openclaw] )) && (( $+functions[compdef] )); then
+  source <(openclaw completion --shell zsh 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^\[plugins\]')
+fi
+
+# Bun global packages PATH
+export PATH="/root/.bun/bin:$PATH"

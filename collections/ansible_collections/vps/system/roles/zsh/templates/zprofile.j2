@@ -1,0 +1,8 @@
+# Zprofile - Loaded in login shells
+# This file initializes ZINIT_HOME before zshrc is loaded
+
+# Initialize Zinit
+export ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
+
+# Source zshrc for all configuration
+source ~/.zshrc

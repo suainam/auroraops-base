@@ -1,0 +1,9 @@
+---
+- name: 设置用户 shell 为 zsh
+  ansible.builtin.user:
+    name: "{{ item }}"
+    shell: /bin/zsh
+  loop:
+    - root
+    - "{{ admin_user }}"
+  tags: [deploy, personalization, zsh, zsh_set_shell, phase2]

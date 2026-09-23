@@ -1,0 +1,59 @@
+---
+- name: 恢复 root 默认 shell 为 bash (示例回滚操作)
+  ansible.builtin.user:
+    name: root
+    shell: /bin/bash
+  tags:
+    - rollback
+    - personalization
+    - zsh
+    - zsh_rollback_shell
+    - phase2
+- name: 移除 Zinit 安装目录 (示例回滚操作)
+  ansible.builtin.file:
+    path: /root/.local/share/zinit
+    state: absent
+  tags:
+    - rollback
+    - personalization
+    - zsh
+    - zsh_remove_zinit
+    - phase2
+- name: 移除 .zshrc 文件 (示例回滚操作)
+  ansible.builtin.file:
+    path: /root/.zshrc
+    state: absent
+  tags:
+    - rollback
+    - personalization
+    - zsh
+    - zsh_remove_zshrc
+    - phase2
+- name: 卸载 zsh, git, curl 软件包 (Debian 示例回滚操作)
+  ansible.builtin.apt:
+    name:
+      - zsh
+      - git
+      - curl
+    state: absent
+  when: (ansible_facts.distribution | default(ansible_distribution | default('Debian'))) != 'Alpine'
+  tags:
+    - rollback
+    - personalization
+    - zsh
+    - zsh_uninstall_packages
+    - phase2
+- name: 卸载 zsh, git, curl 软件包 (Alpine 示例回滚操作)
+  community.general.apk:
+    name:
+      - zsh
+      - git
+      - curl
+    state: absent
+  when: (ansible_facts.distribution | default(ansible_distribution | default('Debian'))) == 'Alpine'
+  tags:
+    - rollback
+    - personalization
+    - zsh
+    - zsh_uninstall_packages
+    - phase2

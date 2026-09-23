@@ -1,0 +1,53 @@
+# Shared shell environment — sourced by both bash and zsh (interactive shells only)
+
+# --- Base ---
+export EDITOR=vim
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PATH="$HOME/.local/bin:$PATH"
+{% if zsh_enable_default_proxy | default(false) %}
+# --- Proxy (auto-detect WSL vs native Linux) ---
+_setup_proxy() {
+    local host
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        host=$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)
+    else
+        host=127.0.0.1
+    fi
+    export http_proxy="http://${host}:7897"
+    export https_proxy="http://${host}:7897"
+    export HTTP_PROXY="$http_proxy"
+    export HTTPS_PROXY="$https_proxy"
+    export ALL_PROXY="$http_proxy"
+    export no_proxy="localhost,127.0.0.1,::1"
+}
+_setup_proxy
+unset -f _setup_proxy
+{% endif %}
+alias setproxy='
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        _h=$(awk '"'"'/nameserver/ {print $2; exit}'"'"' /etc/resolv.conf)
+    else
+        _h=127.0.0.1
+    fi
+    export http_proxy="http://${_h}:7897" https_proxy="http://${_h}:7897" \
+           HTTP_PROXY="http://${_h}:7897" HTTPS_PROXY="http://${_h}:7897" \
+           ALL_PROXY="http://${_h}:7897" no_proxy="localhost,127.0.0.1,::1"
+    unset _h'
+
+alias unsetproxy='unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy'
+
+# --- NVM ---
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+
+# --- Conda ---
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    . "$HOME/miniconda3/etc/profile.d/conda.sh"
+elif [ -d "$HOME/miniconda3/bin" ]; then
+    export PATH="$HOME/miniconda3/bin:$PATH"
+fi
+
+# --- pipx env ---
+[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
