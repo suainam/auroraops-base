@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+# Managed by AuroraOps Universal Task Library
+
+name="{{ service_name }}"
+description="{{ service_description | default(service_name) }}"
+command="{{ service_exec_start.split()[0] }}"
+command_args="{{ service_exec_start.split()[1:] | join(' ') }}"
+command_user="{{ service_user | default('root') }}"
+{% if service_working_directory is defined and service_working_directory %}
+directory="{{ service_working_directory }}"
+{% endif %}
+supervisor="supervise-daemon"
+respawn_delay={{ service_restart_sec | default(5) }}
+
+depend() {
+    need net
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description={{ timer_description | default(timer_name) }}
+After=network.target
+
+[Timer]
+OnCalendar={{ timer_schedule | default('daily') }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

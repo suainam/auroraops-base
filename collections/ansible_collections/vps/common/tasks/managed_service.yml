@@ -1,0 +1,77 @@
+---
+# Universal Managed Service Task Library (Systemd vs OpenRC)
+# Parameters:
+#   service_name: (string, required) unique service name without extension
+#   service_description: (string, optional) human-readable service description
+#   service_exec_start: (string, required) absolute command path to execute
+#   service_user: (string, optional, default: 'root')
+#   service_group: (string, optional, default: 'root')
+#   service_type: (string, optional, default: 'simple')
+#   service_restart: (string, optional, default: 'on-failure')
+#   service_restart_sec: (int/string, optional, default: 5)
+#   service_working_directory: (string, optional)
+#   service_environment_file: (string, optional)
+#   service_environment: (dict, optional)
+#   service_state: (string, optional, default: 'started')
+#   service_enabled: (bool, optional, default: true)
+
+- name: "[Managed Service] Assert required parameters"
+  ansible.builtin.assert:
+    that:
+      - service_name is defined and service_name | length > 0
+      - service_exec_start is defined and service_exec_start | length > 0
+    fail_msg: "managed_service requires 'service_name' and 'service_exec_start'."
+
+- name: "[Managed Service] Detect init system"
+  ansible.builtin.set_fact:
+    managed_service_init_system: >-
+      {{
+        'openrc'
+        if (ansible_facts.distribution | default(ansible_distribution | default('')) == 'Alpine'
+            or ansible_service_mgr | default('') == 'openrc')
+        else 'systemd'
+      }}
+
+# -----------------------------------------------------------------------------
+# Systemd Implementation (Debian / Ubuntu / VPS)
+# -----------------------------------------------------------------------------
+- name: "[Managed Service: Systemd] Render service unit file"
+  become: true
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../../common/templates/systemd_managed_service.j2"
+    dest: "/etc/systemd/system/{{ service_name }}.service"
+    mode: "0644"
+  register: managed_service_systemd_unit
+  when: managed_service_init_system == 'systemd'
+
+- name: "[Managed Service: Systemd] Reload daemon and manage service state"
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ service_name }}.service"
+    daemon_reload: "{{ managed_service_systemd_unit.changed | default(false) }}"
+    state: "{{ service_state | default('started') }}"
+    enabled: "{{ service_enabled | default(true) | bool }}"
+  when:
+    - managed_service_init_system == 'systemd'
+    - not ansible_check_mode
+
+# -----------------------------------------------------------------------------
+# OpenRC Implementation (Alpine Linux / NAT Nodes)
+# -----------------------------------------------------------------------------
+- name: "[Managed Service: OpenRC] Render init.d service script"
+  become: true
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../../common/templates/openrc_managed_service.j2"
+    dest: "/etc/init.d/{{ service_name }}"
+    mode: "0755"
+  when: managed_service_init_system == 'openrc'
+
+- name: "[Managed Service: OpenRC] Enable and start OpenRC service"
+  become: true
+  ansible.builtin.service:
+    name: "{{ service_name }}"
+    state: "{{ service_state | default('started') }}"
+    enabled: "{{ service_enabled | default(true) | bool }}"
+  when:
+    - managed_service_init_system == 'openrc'
+    - not ansible_check_mode

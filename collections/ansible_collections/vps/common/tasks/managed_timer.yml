@@ -1,0 +1,90 @@
+---
+# Universal Managed Timer Task Library (Systemd vs Alpine Crond)
+# Parameters:
+#   timer_name: (string, required) unique timer name without extension
+#   timer_description: (string, optional) description of the periodic job
+#   timer_exec_start: (string, required) command to execute periodically
+#   timer_schedule: (string, optional, default: 'daily') e.g. 'daily', 'hourly', '0 3 * * *'
+#   timer_user: (string, optional, default: 'root')
+#   timer_state: (string, optional, default: 'started')
+#   timer_enabled: (bool, optional, default: true)
+
+- name: "[Managed Timer] Assert required parameters"
+  ansible.builtin.assert:
+    that:
+      - timer_name is defined and timer_name | length > 0
+      - timer_exec_start is defined and timer_exec_start | length > 0
+    fail_msg: "managed_timer requires 'timer_name' and 'timer_exec_start'."
+
+- name: "[Managed Timer] Detect init system"
+  ansible.builtin.set_fact:
+    managed_timer_init_system: >-
+      {{
+        'openrc'
+        if (ansible_facts.distribution | default(ansible_distribution | default('')) == 'Alpine'
+            or ansible_service_mgr | default('') == 'openrc')
+        else 'systemd'
+      }}
+
+# -----------------------------------------------------------------------------
+# Systemd Implementation (Debian / Ubuntu / VPS)
+# -----------------------------------------------------------------------------
+- name: "[Managed Timer: Systemd] Render underlying service unit"
+  become: true
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../../common/templates/systemd_managed_service.j2"
+    dest: "/etc/systemd/system/{{ timer_name }}.service"
+    mode: "0644"
+  vars:
+    service_name: "{{ timer_name }}"
+    service_description: "{{ timer_description | default(timer_name) }}"
+    service_exec_start: "{{ timer_exec_start }}"
+    service_user: "{{ timer_user | default('root') }}"
+    service_type: "oneshot"
+    service_restart: "no"
+  when: managed_timer_init_system == 'systemd'
+
+- name: "[Managed Timer: Systemd] Render timer unit"
+  become: true
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../../common/templates/systemd_managed_timer.j2"
+    dest: "/etc/systemd/system/{{ timer_name }}.timer"
+    mode: "0644"
+  register: managed_timer_systemd_unit
+  when: managed_timer_init_system == 'systemd'
+
+- name: "[Managed Timer: Systemd] Reload daemon and manage timer state"
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ timer_name }}.timer"
+    daemon_reload: "{{ managed_timer_systemd_unit.changed | default(false) }}"
+    state: "{{ timer_state | default('started') }}"
+    enabled: "{{ timer_enabled | default(true) | bool }}"
+  when:
+    - managed_timer_init_system == 'systemd'
+    - not ansible_check_mode
+
+# -----------------------------------------------------------------------------
+# Alpine Linux Implementation (Crond)
+# -----------------------------------------------------------------------------
+- name: "[Managed Timer: OpenRC] Ensure crond service is running on Alpine"
+  become: true
+  ansible.builtin.service:
+    name: crond
+    state: started
+    enabled: true
+  when:
+    - managed_timer_init_system == 'openrc'
+    - not ansible_check_mode
+
+- name: "[Managed Timer: OpenRC] Register crontab periodic job on Alpine"
+  become: true
+  ansible.builtin.cron:
+    name: "{{ timer_name }}"
+    user: "{{ timer_user | default('root') }}"
+    job: "{{ timer_exec_start }}"
+    state: "{{ 'present' if (timer_enabled | default(true) | bool) else 'absent' }}"
+    special_time: "{{ timer_schedule if timer_schedule in ['hourly', 'daily', 'weekly', 'monthly'] else omit }}"
+  when:
+    - managed_timer_init_system == 'openrc'
+    - not ansible_check_mode

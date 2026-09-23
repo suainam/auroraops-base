@@ -1,0 +1,27 @@
+[Unit]
+Description={{ service_description | default(service_name) }}
+After=network.target
+
+[Service]
+Type={{ service_type | default('simple') }}
+User={{ service_user | default('root') }}
+{% if service_group is defined and service_group %}
+Group={{ service_group }}
+{% endif %}
+{% if service_working_directory is defined and service_working_directory %}
+WorkingDirectory={{ service_working_directory }}
+{% endif %}
+{% if service_environment_file is defined and service_environment_file %}
+EnvironmentFile={{ service_environment_file }}
+{% endif %}
+ExecStart={{ service_exec_start }}
+Restart={{ service_restart | default('on-failure') }}
+RestartSec={{ service_restart_sec | default(5) }}
+{% if service_environment is defined and service_environment is mapping %}
+{% for k, v in service_environment.items() %}
+Environment="{{ k }}={{ v }}"
+{% endfor %}
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target
