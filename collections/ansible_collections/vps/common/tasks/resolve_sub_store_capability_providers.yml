@@ -1,0 +1,77 @@
+---
+- name: Build effective Sub-Store capability provider catalog
+  ansible.builtin.set_fact:
+    sub_store_capability_providers_effective: >-
+      {{ ((sub_store_external_providers_effective | default([])
+            | rejectattr('name', 'equalto', sub_store_capability_primary_provider_name)
+            | selectattr('enabled', 'equalto', true)
+            | selectattr('fallback-only', 'undefined') | list)
+          + (sub_store_external_providers_effective | default([])
+             | rejectattr('name', 'equalto', sub_store_capability_primary_provider_name)
+             | selectattr('enabled', 'equalto', true)
+             | selectattr('fallback-only', 'defined')
+             | selectattr('fallback-only', 'equalto', false) | list)
+          + [{'name': sub_store_subscription_name,
+              'provider-id': sub_store_capability_primary_provider_name,
+              'url': sub_store_source_url,
+              'enabled': true,
+              'fallback-only': false,
+              'owned': true,
+              'display-group': (
+                sub_store_external_providers_effective | default([])
+                | selectattr('name', 'equalto', sub_store_capability_primary_provider_name)
+                | map(attribute='display-group') | select('defined') | first
+                | default(sub_store_capability_primary_provider_display_group | default('VPS'))
+              ),
+              'additional-prefix': (
+                sub_store_external_providers_effective | default([])
+                | selectattr('name', 'equalto', sub_store_capability_primary_provider_name)
+                | map(attribute='additional-prefix') | first
+                | default('[' ~ sub_store_capability_primary_provider_name ~ ']')
+              )}]
+          + (sub_store_external_providers_effective | default([])
+             | rejectattr('name', 'equalto', sub_store_capability_primary_provider_name)
+             | selectattr('enabled', 'equalto', true)
+             | selectattr('fallback-only', 'defined')
+             | selectattr('fallback-only', 'equalto', true) | list)) }}
+  no_log: true
+
+- name: Initialize capability provider source identities
+  ansible.builtin.set_fact:
+    sub_store_capability_provider_source_ids: []
+  no_log: true
+
+- name: Append capability provider source identities
+  ansible.builtin.set_fact:
+    sub_store_capability_provider_source_ids: >-
+      {{ sub_store_capability_provider_source_ids
+         + [source_provider['provider-id'] | default(source_provider.name)] }}
+  loop: "{{ sub_store_capability_providers_effective }}"
+  loop_control:
+    loop_var: source_provider
+  no_log: true
+
+- name: Build capability provider source names
+  ansible.builtin.set_fact:
+    sub_store_capability_provider_source_names: >-
+      {{ sub_store_capability_providers_effective | map(attribute='name') | list }}
+  no_log: true
+
+- name: Validate capability provider source identities
+  ansible.builtin.assert:
+    that:
+      - sub_store_capability_provider_source_ids | unique | length == sub_store_capability_provider_source_ids | length
+      - sub_store_capability_provider_source_names | unique | length == sub_store_capability_provider_source_names | length
+      - >-
+        sub_store_capability_provider_source_ids
+        | select('match', '^[A-Za-z0-9][A-Za-z0-9_-]*$') | list
+        | length == sub_store_capability_provider_source_ids | length
+    fail_msg: >-
+      Capability providers require unique provider-id and physical name values;
+      provider-id values must contain only ASCII letters, numbers, underscores, or hyphens.
+  no_log: true
+
+- name: Expose capability provider catalog to Docker role
+  ansible.builtin.set_fact:
+    docker_apps_sub_store_capability_providers: "{{ sub_store_capability_providers_effective }}"
+  no_log: true

@@ -1,0 +1,105 @@
+---
+- name: Build effective Sub-Store external provider list
+  ansible.builtin.set_fact:
+    sub_store_external_providers_effective: >-
+      {{ sub_store_external_providers | default([])
+         | rejectattr('name', 'in', sub_store_retired_provider_names | default([]))
+         | list }}
+  no_log: true
+
+- name: Remove stale inventory-bound NAT providers
+  ansible.builtin.set_fact:
+    sub_store_external_providers_effective: >-
+      {{ sub_store_external_providers_effective
+         | rejectattr('name', 'in', [nat_provider_host, nat_provider_name])
+         | rejectattr('inventory_host', 'defined')
+         | list
+         + (sub_store_external_providers_effective
+            | selectattr('inventory_host', 'defined')
+            | rejectattr('name', 'in', [nat_provider_host, nat_provider_name])
+            | rejectattr('inventory_host', 'in', [nat_provider_host, nat_provider_name])
+            | list) }}
+  loop: "{{ groups.get(sub_store_nat_provider_group | default('nat_nodes'), []) }}"
+  loop_control:
+    loop_var: nat_provider_host
+  vars:
+    nat_provider_config: >-
+      {{ sub_store_external_providers | default([])
+         | selectattr('inventory_host', 'defined')
+         | selectattr('inventory_host', 'equalto', nat_provider_host)
+         | list | first | default({}) }}
+    nat_provider_name: >-
+      {{ nat_provider_config.name
+         | default(hostvars[nat_provider_host].nat_sub_store_provider_name
+           | default(nat_provider_host)) }}
+    nat_provider_enabled: >-
+      {{ hostvars[nat_provider_host].nat_sub_store_provider_enabled | default(true)
+         and nat_provider_config.enabled | default(true) }}
+    nat_provider_address: >-
+      {{ hostvars[nat_provider_host].nat_public_ipv4 | default('') }}
+    nat_provider_scheme: >-
+      {{ hostvars[nat_provider_host].singbox_subscription_scheme | default('http') }}
+    nat_provider_port: >-
+      {{ hostvars[nat_provider_host].nat_web_port | default(10080) }}
+    nat_provider_token: >-
+      {{ hostvars[nat_provider_host].singbox_sub_token | default(singbox_sub_token | default('')) }}
+    nat_provider_endpoint: "{{ nat_provider_scheme }}://{{ nat_provider_address }}:{{ nat_provider_port }}"
+  when:
+    - sub_store_nat_provider_discovery_enabled | default(true) | bool
+  no_log: true
+
+- name: Add inventory NAT nodes to effective Sub-Store providers
+  ansible.builtin.set_fact:
+    sub_store_external_providers_effective: >-
+      {{ sub_store_external_providers_effective + [{
+        'name': nat_provider_name,
+        'provider-id': nat_provider_config['provider-id']
+          | default(hostvars[nat_provider_host].nat_sub_store_provider_id
+            | default(nat_provider_name)),
+        'provider-group': nat_provider_config['provider-group']
+          | default(hostvars[nat_provider_host].nat_sub_store_provider_group
+            | default(nat_provider_name)),
+        'display-group': nat_provider_config['display-group']
+          | default(hostvars[nat_provider_host].nat_sub_store_provider_display_group
+            | default('NAT')),
+        'url': nat_provider_endpoint ~ '/' ~ nat_provider_token ~ '.yaml',
+        'enabled': true,
+        'fallback-only': nat_provider_config['fallback-only'] | default(false),
+        'owned': nat_provider_config.owned | default(false),
+        'inventory_host': nat_provider_host,
+        'additional-prefix': nat_provider_config['additional-prefix']
+          | default(hostvars[nat_provider_host].nat_sub_store_provider_prefix
+            | default('[' ~ nat_provider_name ~ ']'))
+      }] }}
+  loop: "{{ groups.get(sub_store_nat_provider_group | default('nat_nodes'), []) }}"
+  loop_control:
+    loop_var: nat_provider_host
+  vars:
+    nat_provider_config: >-
+      {{ sub_store_external_providers | default([])
+         | selectattr('inventory_host', 'defined')
+         | selectattr('inventory_host', 'equalto', nat_provider_host)
+         | list | first | default({}) }}
+    nat_provider_name: >-
+      {{ nat_provider_config.name
+         | default(hostvars[nat_provider_host].nat_sub_store_provider_name
+           | default(nat_provider_host)) }}
+    nat_provider_enabled: >-
+      {{ hostvars[nat_provider_host].nat_sub_store_provider_enabled | default(true)
+         and nat_provider_config.enabled | default(true) }}
+    nat_provider_address: >-
+      {{ hostvars[nat_provider_host].nat_public_ipv4 | default('') }}
+    nat_provider_scheme: >-
+      {{ hostvars[nat_provider_host].singbox_subscription_scheme | default('http') }}
+    nat_provider_port: >-
+      {{ hostvars[nat_provider_host].nat_web_port | default(10080) }}
+    nat_provider_token: >-
+      {{ hostvars[nat_provider_host].singbox_sub_token | default(singbox_sub_token | default('')) }}
+    nat_provider_endpoint: "{{ nat_provider_scheme }}://{{ nat_provider_address }}:{{ nat_provider_port }}"
+  when:
+    - sub_store_nat_provider_discovery_enabled | default(true) | bool
+    - nat_provider_enabled | bool
+    - nat_provider_address | length > 0
+    - nat_provider_token | length > 0
+    - nat_provider_host not in (sub_store_retired_provider_names | default([]))
+  no_log: true
