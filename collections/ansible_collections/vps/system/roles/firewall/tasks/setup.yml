@@ -8,15 +8,59 @@
     notify: Reload ufw
     tags: [deploy, system, firewall, phase1, firewall_apply]
 
+  # Measured before the flush, so `changed` reports what actually happened.
+  # This used to be `changed_when: true` unconditionally, which is the reason the
+  # idempotence stage could never pass for this role: a converged host still
+  # reported one change every run, so `changed=0` was unreachable by
+  # construction rather than because something was genuinely drifting.
+  - name: Measure the nftables ruleset before flushing
+    become: yes
+    ansible.builtin.shell: |
+      set -o pipefail
+      nft list ruleset 2>/dev/null | grep -cve '^[[:space:]]*$' || true
+    register: firewall_nft_ruleset_lines
+    changed_when: false
+    failed_when: false
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  # The flush is still unconditional when there is something to flush. It is not
+  # gratuitous: ufw on the iptables-nft backend keeps its rules, including its
+  # default policies, inside this ruleset, so stale entries from a previously
+  # enabled nftables would otherwise survive forever. What is wrong is claiming a
+  # change on every run regardless.
   - name: Flush nftables rules
     become: yes
     ansible.builtin.command:
       cmd: nft flush ruleset
-    changed_when: true
+    changed_when: (firewall_nft_ruleset_lines.stdout | default('0') | trim | int) > 0
     ignore_errors: true
     # Docker chain restoration is owned by tasks/docker_reconcile.yml, which
     # repairs deterministically and asserts fail-closed. A handler cannot do
     # that: it is skipped in check mode and only runs at end-of-play.
+    #
+    # This deliberately does not notify a ufw reload. The default policies are
+    # re-applied explicitly below, from a snapshot taken *after* the flush, so
+    # the ordering does not depend on a handler firing at end-of-play -- and a
+    # handler would be skipped in check mode, leaving the check stage unable to
+    # show that the policies get set.
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
+  # Read after the flush, not before. The previous version decided whether to set
+  # the default policies from `firewall_ufw_status_verbose`, which preflight.yml
+  # captures *before* setup.yml runs -- and the flush above destroys exactly the
+  # state that snapshot describes. So on a host that already had
+  # `Default: deny (incoming)`, the flush removed it and the `when` then reported
+  # it as already correct and skipped. The incoming policy was left at whatever
+  # ufw falls back to, which is allow. It read as an idempotence wart; it was a
+  # fail-open on the one setting that decides whether a host accepts unsolicited
+  # inbound traffic.
+  - name: Re-read UFW status after the nftables flush
+    become: yes
+    ansible.builtin.command:
+      cmd: ufw status verbose
+    register: firewall_ufw_status_postflush
+    changed_when: false
+    failed_when: false
     tags: [deploy, system, firewall, phase1, firewall_apply]
 
   - name: Read apt sources list for UFW install
@@ -91,12 +135,16 @@
       - {direction: 'incoming', policy: 'deny'}
       - {direction: 'outgoing', policy: 'allow'}
       - {direction: 'routed', policy: 'allow'}
+    # Decided from the post-flush read, for the reason given above. Falling back
+    # to the preflight snapshot would reintroduce the fail-open if that read
+    # failed for any reason, so the fallback is the *action* rather than the
+    # skip: an unreadable status means re-apply, not assume-correct.
     when: >
-      (item.direction == 'incoming' and 'Default: deny (incoming)' not in firewall_ufw_status_verbose.stdout)
+      (item.direction == 'incoming' and 'Default: deny (incoming)' not in (firewall_ufw_status_postflush.stdout | default('')))
       or
-      (item.direction == 'outgoing' and 'Default: allow (outgoing)' not in firewall_ufw_status_verbose.stdout)
+      (item.direction == 'outgoing' and 'Default: allow (outgoing)' not in (firewall_ufw_status_postflush.stdout | default('')))
       or
-      (item.direction == 'routed' and 'Default: allow (routed)' not in firewall_ufw_status_verbose.stdout)
+      (item.direction == 'routed' and 'Default: allow (routed)' not in (firewall_ufw_status_postflush.stdout | default('')))
     notify: Reload ufw
     tags: [deploy, system, firewall, phase1, firewall_apply]
 
