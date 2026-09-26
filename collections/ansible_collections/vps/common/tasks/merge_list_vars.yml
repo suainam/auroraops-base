@@ -24,15 +24,22 @@
 
 - name: "合并列表变量: {{ merge_var_name }}"
   ansible.builtin.set_fact:
+    # Port lists mix literal integers with values derived from the port source of
+    # truth, which arrive as text. Sorting a mixed list raises a type error, and
+    # comparing "9999" against 9993 as text is wrong anyway, so digit-only
+    # entries are converted to integers before merging. Non-numeric entries
+    # (port ranges such as "30100:30105") are preserved as-is.
     "{{ merge_var_name }}": >-
-      {{
-        (
+      {%- set merged = (
           (lookup('vars', merge_var_name + '_global', default=[]) | default([]))
           + (lookup('vars', merge_var_name + '_host', default=[]) | default([]))
-        ) | difference(lookup('vars', merge_var_name + '_exclude', default=[]) | default([]))
-        | unique
-        | sort
-      }}
+        ) | difference(lookup('vars', merge_var_name + '_exclude', default=[]) | default([])) -%}
+      {%- set ns = namespace(items=[]) -%}
+      {%- for item in merged -%}
+      {%-   set _value = (item | int) if ((item is string) and (item is match('^[0-9]+$'))) else item -%}
+      {%-   set ns.items = ns.items + [_value] -%}
+      {%- endfor -%}
+      {{ ns.items | unique | sort }}
   tags: [always]
 
 - name: "调试: 显示 {{ merge_var_name }} 合并结果"
