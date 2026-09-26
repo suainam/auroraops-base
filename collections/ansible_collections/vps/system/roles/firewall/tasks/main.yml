@@ -43,3 +43,16 @@
   - system
   - firewall
   - phase1
+
+# Convergence runs after the additions and outside the check-mode gate. Order
+# matters because a removal that precedes the matching allow would close a port
+# this same deploy is reopening; the gate is left open because the removals are
+# the one irreversible step here and belong in the dry run, not only in the
+# retrospective.
+- name: Converge the managed allow list
+  ansible.builtin.import_tasks: converge.yml
+  tags:
+  - deploy
+  - system
+  - firewall
+  - phase1

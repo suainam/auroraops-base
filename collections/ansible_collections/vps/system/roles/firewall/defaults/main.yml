@@ -24,6 +24,33 @@ firewall_udp_ports_exclude: []
 
 firewall_fact_path: /etc/ansible/facts.d/firewall.fact
 firewall_baseline_version: 1
+
+# --- 删除意图 ---
+# firewall_fact_path 是「首次部署前」的只读检查点，只写一次；它不能回答
+# 「角色上次收敛到了什么」，所以另存一份每次部署都刷新的收敛记录。
+firewall_converged_path: /etc/ansible/facts.d/firewall_converged.json
+firewall_converged_version: 1
+
+# 声明「这些端口不应存在」。每项是精确的 (proto, port[/range], source) 三元组，
+# 角色保证其缺席。声明一条已经不存在的规则是空操作，所以它描述的是期望终态，
+# 而不是一次动作——这让声明可以长期留在配置里而不必每次迁移都改写。
+firewall_remove_rules: []
+
+# 收敛角色自己放行过的端口：上次记录里有、当前计划里没有的端口会被关闭。
+#
+# 默认关闭，有两个原因。其一，历史上这份记录只在首次部署写入一次，因此在一台
+# 已存在的机器上它描述的是很久以前的状态；把这样的记录当作「角色管过的端口」
+# 会在升级当天关掉仍在监听的端口。其二，防火墙的删除不可逆，升级即删除会让
+# 所有主机在一次无关的版本推进中同时改变暴露面。开启它是每台主机自己的决定，
+# 前提是该机的记录已经可信。
+#
+# 没有记录的主机推断不出任何东西，因此什么也不会删除。
+firewall_converge_managed: false
+
+# 开启收敛时，端口上仍有监听进程的跳过不关，并明确报出。计划里没有这个端口
+# 但服务还在监听，通常意味着计划过时而不是服务该下线；这个决定应留给运维，
+# 而不是由一次部署替它做下。显式列进 firewall_remove_rules 即表示「照关」。
+firewall_converge_skip_ports_with_listeners: true
 firewall_managed_files:
   - /etc/default/ufw
   - /etc/ufw/after.init

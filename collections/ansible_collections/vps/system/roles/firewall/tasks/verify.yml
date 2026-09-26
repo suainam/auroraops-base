@@ -99,6 +99,48 @@
   when: firewall_hysteria_hopping.enabled
   tags: [verify, system, firewall, phase1]
 
+# The absence half of convergence. Everything above this point proves the plan's
+# ports are open; nothing proved that the ports which left the plan were closed,
+# which is how stale rules survived a deploy that was otherwise entirely green.
+- name: Read the current ruleset for absence checks
+  become: true
+  ansible.builtin.command: ufw status numbered
+  register: firewall_verify_status_numbered
+  changed_when: false
+  tags: [verify, system, firewall, phase1, firewall_verify_absence]
+
+- name: Parse the ruleset into exact rule keys
+  ansible.builtin.set_fact:
+    firewall_verify_rule_keys: >-
+      {{ firewall_verify_status_numbered.stdout_lines
+         | map('regex_replace', firewall_rule_line_pattern, '\1/\2|\3') | list }}
+  vars:
+    # See the note in tasks/converge.yml. A key is parsed out of each line rather
+    # than matched as text, so a source-scoped rule is never mistaken for an
+    # open one: both lines contain the same port and protocol, and the difference
+    # is in a column further right.
+    firewall_rule_line_pattern: >-
+      ^\[\s*\d+\]\s+(\S+?)/(tcp|udp)\s*(?:\(v6\)\s*)?(?:ALLOW|LIMIT)\s+(?:IN\s+)?(.+?)(?:\s*\(v6\))?\s*(?:#.*)?$
+  tags: [verify, system, firewall, phase1, firewall_verify_absence]
+
+- name: Check that declared removals are absent from the ruleset
+  ansible.builtin.assert:
+    that:
+      - firewall_removal_key not in firewall_verify_rule_keys
+    fail_msg: >-
+      {{ item.port }}/{{ item.proto }} from {{ item.source | default('any') }} is
+      declared as removed but is still allowed. A declaration is a desired end
+      state, so a deploy that leaves the rule in place has not converged.
+  vars:
+    firewall_removal_key: >-
+      {{ item.port }}/{{ item.proto }}|{{ 'Anywhere'
+         if (item.source | default('any')) == 'any' else item.source }}
+  loop: "{{ firewall_remove_rules | default([]) }}"
+  loop_control:
+    label: "{{ item.port | default('<no port>') }}/{{ item.proto | default('tcp') }}"
+  when: item.port is defined
+  tags: [verify, system, firewall, phase1, firewall_verify_absence]
+
 - name: Check current forwarding sysctl values
   become: true
   ansible.builtin.command: "sysctl -n {{ item }}"
@@ -148,6 +190,51 @@
       - "'This script is managed by Ansible.' in (firewall_after_init_raw.content | b64decode)"
     fail_msg: "/etc/ufw/after.init does not contain managed firewall template content"
   tags: [verify, system, firewall, phase1]
+
+# --- container networking ----------------------------------------------------
+# This role flushes the whole nftables ruleset during setup, and on a host where
+# ufw is iptables-nft that takes Docker's chains and bridge NAT with it. Docker
+# does not rebuild them on its own, so a deploy can leave every container running
+# with no route off the host -- containers still report Up, and nothing in this
+# role's own checks notices. The chain count is the signal; the recovery path is
+# asserted separately by the fact that the handler no longer depends on a
+# variable this role does not own.
+- name: Check whether Docker is running on this host
+  become: true
+  ansible.builtin.command: systemctl is-active --quiet docker
+  register: firewall_docker_active
+  changed_when: false
+  failed_when: false
+  tags: [verify, system, firewall, phase1, firewall_verify_docker]
+
+- name: Count the Docker chains in the filter table
+  become: true
+  ansible.builtin.shell: "iptables -S 2>/dev/null | grep -c '^-N DOCKER' || true"
+  register: firewall_docker_chain_count
+  changed_when: false
+  when: firewall_docker_active.rc == 0
+  tags: [verify, system, firewall, phase1, firewall_verify_docker]
+
+- name: Count the bridge masquerade rules in the nat table
+  become: true
+  ansible.builtin.shell: "iptables -t nat -S POSTROUTING 2>/dev/null | grep -c MASQUERADE || true"
+  register: firewall_docker_masquerade_count
+  changed_when: false
+  when: firewall_docker_active.rc == 0
+  tags: [verify, system, firewall, phase1, firewall_verify_docker]
+
+- name: Assert Docker networking survived the ruleset flush
+  ansible.builtin.assert:
+    that:
+      - firewall_docker_chain_count.stdout | trim | int > 0
+      - firewall_docker_masquerade_count.stdout | trim | int > 0
+    fail_msg: >-
+      Docker is running but its iptables chains or bridge masquerade rules are
+      gone, so containers have no route off this host even though they report Up.
+      The ruleset flush in setup.yml destroys them and Docker does not rebuild
+      them by itself; restart Docker to restore them.
+  when: firewall_docker_active.rc == 0
+  tags: [verify, system, firewall, phase1, firewall_verify_docker]
 
 - name: Verify NAT Redirect rule exists
   become: true

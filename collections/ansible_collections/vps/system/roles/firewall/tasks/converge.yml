@@ -1,0 +1,299 @@
+# Converge the allow list: close what this role opened and no longer plans.
+#
+# The role used to only ever add rules, so a port dropped from the host
+# configuration stayed open forever. Nothing reported it, because "the port is
+# absent from the plan" and "the port is absent from the firewall" were never
+# compared. The leftovers then had to be removed by hand, and once a few have
+# accumulated they are indistinguishable from rules an operator added on purpose.
+#
+# Deletion here is exact. A target is a (proto, port[/range], source) triple, it
+# is issued only when that exact rule is present in the ruleset, and it is
+# refused outright when the current plan still wants the port. Both guards run
+# before any delete is issued, so a contradictory port list cannot take the SSH
+# port or a still-planned port down halfway through a run.
+
+# Imported from main.yml after the allow rules have been added, never before:
+# closing a port that this same deploy is about to open is how a host loses
+# access to itself. It is not gated on check mode, because the removals are the
+# one irreversible step in this role and they have to be reviewable in a dry run
+# rather than only discoverable afterwards.
+- name: Read the current ruleset for convergence
+  become: true
+  check_mode: false
+  ansible.builtin.command: ufw status numbered
+  register: firewall_converge_status
+  changed_when: false
+  failed_when: false
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Check the converged allow-list record
+  become: true
+  ansible.builtin.stat:
+    path: "{{ firewall_converged_path }}"
+  register: firewall_converged_stat
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Read the converged allow-list record
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ firewall_converged_path }}"
+  register: firewall_converged_raw
+  when: firewall_converged_stat.stat.exists
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Parse the converged allow-list record
+  ansible.builtin.set_fact:
+    firewall_previous_managed: "{{ firewall_converged_raw.content | b64decode | from_json }}"
+  when: firewall_converged_stat.stat.exists
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# The desired set as "port/proto" strings, so a removal target can be compared
+# against it directly. The hopping range belongs here even though it is not part
+# of the effective port list: it is an extra rule this role adds, so without it
+# a range that left the plan would look like a removal candidate.
+- name: Build the desired allow pairs
+  ansible.builtin.set_fact:
+    firewall_desired_pairs: >-
+      {{
+        (firewall_effective_tcp_ports | map('regex_replace', '$', '/tcp') | list)
+        + (firewall_effective_udp_ports | map('regex_replace', '$', '/udp') | list)
+        + (
+            [(firewall_hysteria_hopping.port_range | string) ~ '/udp']
+            if firewall_hysteria_hopping.enabled | bool else []
+          )
+      }}
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# --- declared removals -------------------------------------------------------
+# A declaration states a desired end state, not an action, so a rule that is
+# already absent simply costs nothing and the declaration can stay put.
+- name: Collect the declared removals
+  ansible.builtin.set_fact:
+    firewall_declared_removals: >-
+      {{ (firewall_declared_removals | default([])) + [{
+           'port': item.port | string,
+           'proto': item.proto | default('tcp') | string,
+           'source': item.source | default('any') | string,
+           'origin': 'declared',
+         }] }}
+  loop: "{{ firewall_remove_rules | default([]) }}"
+  loop_control:
+    label: "{{ item.port | default('<no port>') | string }}/{{ item.proto | default('tcp') }}"
+  when: item.port is defined
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# --- converged removals -----------------------------------------------------
+# Ports this role previously opened and the plan no longer contains. A host with
+# no record infers nothing. The first version of this record was written once and
+# frozen, so "we never managed anything" is the only reading of its absence that
+# cannot delete a rule this role did not add.
+- name: Derive the managed ports the plan no longer wants
+  ansible.builtin.set_fact:
+    firewall_stale_tcp_ports: >-
+      {{ ((firewall_previous_managed.tcp_ports | default([])) | difference(firewall_effective_tcp_ports))
+         if (firewall_converge_managed | bool and firewall_converged_stat.stat.exists) else [] }}
+    firewall_stale_udp_ports: >-
+      {{ ((firewall_previous_managed.udp_ports | default([])) | difference(firewall_effective_udp_ports))
+         if (firewall_converge_managed | bool and firewall_converged_stat.stat.exists) else [] }}
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Collect the stale managed TCP ports
+  ansible.builtin.set_fact:
+    firewall_converged_removals: >-
+      {{ (firewall_converged_removals | default([])) + [{
+           'port': item,
+           'proto': 'tcp',
+           'source': 'any',
+           'origin': 'converged',
+         }] }}
+  loop: "{{ firewall_stale_tcp_ports | default([]) }}"
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Collect the stale managed UDP ports
+  ansible.builtin.set_fact:
+    firewall_converged_removals: >-
+      {{ (firewall_converged_removals | default([])) + [{
+           'port': item,
+           'proto': 'udp',
+           'source': 'any',
+           'origin': 'converged',
+         }] }}
+  loop: "{{ firewall_stale_udp_ports | default([]) }}"
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# --- guards -----------------------------------------------------------------
+- name: Refuse to remove a port the current plan still allows
+  ansible.builtin.assert:
+    that:
+      - (item.port ~ '/' ~ item.proto) not in firewall_desired_pairs
+    fail_msg: >-
+      Refusing to remove {{ item.port }}/{{ item.proto }}: the current plan
+      still allows it. A removal and an allow for the same port contradict each
+      other, and deleting it would silently undo the plan.
+  loop: "{{ (firewall_declared_removals | default([])) + (firewall_converged_removals | default([])) }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }} ({{ item.origin }})"
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Refuse to remove the active SSH port
+  ansible.builtin.assert:
+    that:
+      - not (item.proto == 'tcp' and item.port == (ssh_port | string))
+    fail_msg: >-
+      Refusing to remove TCP port {{ item.port }} from {{ item.source }}: that is
+      the active SSH port ({{ ssh_port }}). Locking a host out of its own
+      firewall is not a decision a port list gets to make.
+  loop: "{{ (firewall_declared_removals | default([])) + (firewall_converged_removals | default([])) }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }} ({{ item.origin }})"
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# --- interlock --------------------------------------------------------------
+# A converged-away port that still has a process listening on it is held back
+# rather than closed: the plan is more likely out of date than the service is
+# dead, and a deployment is the wrong place to settle that. Declared removals are
+# exempt, because declaring one is the operator making the call explicitly.
+- name: Read the ports with a live listener
+  become: true
+  ansible.builtin.shell:
+    cmd: "ss -Hlnt 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\\1/' | sort -un"
+    executable: /bin/sh
+  register: firewall_listening_ports
+  changed_when: false
+  when:
+    - firewall_converge_managed | bool
+    - firewall_converge_skip_ports_with_listeners | bool
+    - (firewall_converged_removals | default([]) | length) > 0
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Decide which converged removals still have a listener
+  ansible.builtin.set_fact:
+    firewall_targets_with_listeners: >-
+      {{ (firewall_targets_with_listeners | default({})) | combine({
+           (item.port ~ '/' ~ item.proto): firewall_target_has_listener
+         }) }}
+  vars:
+    firewall_listening_numbers: "{{ firewall_listening_ports.stdout_lines | map('int') | list }}"
+    # A target is either a single port or a "lo:hi" range. A range counts as live
+    # if any listening port falls inside it.
+    firewall_target_has_listener: >-
+      {{ (item.port is match('^[0-9]+$') and (item.port | int) in firewall_listening_numbers)
+         or (item.port is match('^[0-9]+:[0-9]+$')
+             and (firewall_listening_numbers
+                  | select('>=', item.port.split(':')[0] | int) | list
+                  | select('<=', item.port.split(':')[1] | int) | list
+                  | length) > 0) }}
+  loop: "{{ firewall_converged_removals | default([]) }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }}"
+  when: firewall_listening_ports.stdout is defined
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Collect the converged removals held back by a live listener
+  ansible.builtin.set_fact:
+    firewall_removals_held_back: >-
+      {{ (firewall_removals_held_back | default([])) + [item] }}
+  loop: "{{ firewall_converged_removals | default([]) }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }}"
+  when: firewall_targets_with_listeners[item.port ~ '/' ~ item.proto] | default(false) | bool
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Report the converged removals that were held back
+  ansible.builtin.debug:
+    msg: >-
+      Not closing {{ item.port }}/{{ item.proto }}: a process is still listening
+      on it. The plan no longer allows this port, so either the plan is out of
+      date or the service has to be retired first. Declaring the port in
+      firewall_remove_rules closes it anyway.
+  loop: "{{ firewall_removals_held_back | default([]) }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }}"
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Keep only the converged removals that passed the interlock
+  ansible.builtin.set_fact:
+    firewall_converged_removals: >-
+      {{ firewall_converged_removals | default([])
+         | reject('in', firewall_removals_held_back | default([])) | list }}
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# --- exact removal ----------------------------------------------------------
+# A rule is identified by its parsed "port/proto|source" key, never by a
+# substring of the status text. Matching raw text cannot tell "6379/tcp open to
+# the world" from "6379/tcp open to 127.0.0.1", because the two differ in a column
+# to the right of the part being matched -- and a removal that cannot tell them
+# apart deletes the open one when the scoped one was named. Parsing each line
+# first turns the comparison into an equality check, so there is no word-boundary
+# subtlety left to get wrong. (It is tempting to anchor with \b instead: / and a
+# space are both non-word characters, so \b after the protocol is satisfied by
+# either, which is why the first attempt matched 30106/udp against 30106/tcp.)
+#
+# A rule present in both IPv4 and IPv6 parses to the same key twice, which is
+# correct: ufw treats them as one rule, so one target covers both.
+- name: Parse the ruleset into exact rule keys
+  ansible.builtin.set_fact:
+    firewall_present_rule_keys: >-
+      {{ firewall_converge_status.stdout_lines
+         | map('regex_replace', firewall_rule_line_pattern, '\1/\2|\3') | list }}
+  vars:
+    firewall_rule_line_pattern: >-
+      ^\[\s*\d+\]\s+(\S+?)/(tcp|udp)\s*(?:\(v6\)\s*)?(?:ALLOW|LIMIT)\s+(?:IN\s+)?(.+?)(?:\s*\(v6\))?\s*(?:#.*)?$
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# Presence is resolved from those keys, so a target that is not in the ruleset
+# costs nothing: issuing a delete for an absent rule would make every re-run
+# report a change it did not make.
+- name: Resolve which removal targets are present in the ruleset
+  ansible.builtin.set_fact:
+    firewall_present_removals: >-
+      {{ (firewall_present_removals | default([])) + [item] }}
+  vars:
+    firewall_target_key: >-
+      {{ item.port }}/{{ item.proto }}|{{ 'Anywhere' if item.source == 'any' else item.source }}
+  loop: >-
+    {{ (firewall_declared_removals | default([])) + (firewall_converged_removals | default([])) }}
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }} from {{ item.source }} ({{ item.origin }})"
+    extended: true
+  when: firewall_target_key in firewall_present_rule_keys
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+- name: Remove the firewall rules the plan no longer wants
+  become: true
+  community.general.ufw:
+    # Removal is the `delete` flag on an allow rule. Neither `rule: delete` nor
+    # `state: absent` exists here: rule is limited to allow/deny/limit/reject and
+    # state to enabled/disabled/reloaded/reset, so both forms are rejected by the
+    # argument spec before any rule is touched.
+    delete: true
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    from: "{{ item.source }}"
+  loop: "{{ firewall_present_removals | default([]) }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }} from {{ item.source }} ({{ item.origin }})"
+  notify: Reload ufw
+  tags: [deploy, system, firewall, phase1, firewall_converge]
+
+# --- record -----------------------------------------------------------------
+# Refreshed on every deploy, which is what lets the next deploy tell what this
+# one left open. Writing it once is what left the role unable to ask that
+# question at all.
+- name: Record the allow list this deploy converged to
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ firewall_converged_path }}"
+    mode: "0644"
+    content: "{{ firewall_converged_state | to_nice_json }}"
+  vars:
+    firewall_converged_state:
+      auroraops_managed: true
+      version: "{{ firewall_converged_version }}"
+      ssh_port: "{{ ssh_port | string }}"
+      tcp_ports: "{{ firewall_effective_tcp_ports }}"
+      udp_ports: "{{ firewall_effective_udp_ports }}"
+      declared_removals: "{{ firewall_declared_removals | default([]) }}"
+      held_back_removals: "{{ firewall_removals_held_back | default([]) }}"
+  tags: [deploy, system, firewall, phase1, firewall_converge]
