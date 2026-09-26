@@ -1,0 +1,66 @@
+---
+# Shared optional logrotate management.
+# Required vars:
+#   optional_logrotate_owner: human-readable owner label
+#   optional_logrotate_enabled: whether the managed snippet should exist
+#   optional_logrotate_config_path: absolute destination path
+#   optional_logrotate_config: complete logrotate snippet
+# Optional vars:
+#   optional_logrotate_legacy_paths: obsolete paths to remove when disabled
+#
+# Deletion safety: every path this task can remove MUST live under the
+# managed /etc/logrotate.d/auroraops- namespace. Any other absolute path
+# (for example /etc/logrotate.conf or /etc/logrotate.d itself) is rejected
+# before any destructive task runs, so a bad caller can never disable system
+# wide log rotation.
+
+- name: "[Logrotate] Assert required parameters"
+  ansible.builtin.assert:
+    that:
+      - optional_logrotate_owner is defined and optional_logrotate_owner | length > 0
+      - optional_logrotate_enabled is defined
+      - optional_logrotate_config_path is defined and optional_logrotate_config_path is match('^/etc/logrotate\.d/auroraops-')
+      - optional_logrotate_config is defined and optional_logrotate_config | length > 0
+      - (optional_logrotate_legacy_paths | default([])) | select('match', '^/etc/logrotate\.d/auroraops-') | list | length == (optional_logrotate_legacy_paths | default([])) | length
+    fail_msg: >-
+      manage_optional_logrotate requires owner, enabled, a config path and all
+      legacy paths confined to the managed /etc/logrotate.d/auroraops- namespace.
+
+- name: "[Logrotate] Remove disabled managed configuration"
+  become: true
+  ansible.builtin.file:
+    path: "{{ optional_logrotate_config_path }}"
+    state: absent
+  when: not (optional_logrotate_enabled | bool)
+
+- name: "[Logrotate] Remove disabled legacy configurations"
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ optional_logrotate_legacy_paths | default([]) }}"
+  when: not (optional_logrotate_enabled | bool)
+
+- name: "[Logrotate] Write managed configuration"
+  become: true
+  ansible.builtin.copy:
+    content: |
+      # Managed by AuroraOps: {{ optional_logrotate_owner }}
+      {{ optional_logrotate_config }}
+    dest: "{{ optional_logrotate_config_path }}"
+    mode: "0644"
+  when: optional_logrotate_enabled | bool
+
+- name: "[Logrotate] Validate managed configuration"
+  become: true
+  ansible.builtin.command:
+    argv:
+      - logrotate
+      - --debug
+      - "{{ optional_logrotate_config_path }}"
+  register: optional_logrotate_validation
+  changed_when: false
+  failed_when: optional_logrotate_validation.rc != 0
+  when:
+    - optional_logrotate_enabled | bool
+    - not ansible_check_mode

@@ -1,0 +1,30 @@
+---
+- name: "[Logrotate] Assert verification parameters"
+  ansible.builtin.assert:
+    that:
+      - optional_logrotate_owner is defined and optional_logrotate_owner | length > 0
+      - optional_logrotate_enabled is defined
+      - optional_logrotate_config_path is defined and optional_logrotate_config_path is match('^/')
+    fail_msg: >-
+      verify_optional_logrotate requires owner, enabled, and an absolute config path.
+
+- name: "[Logrotate] Inspect managed configuration"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ optional_logrotate_config_path }}"
+  register: optional_logrotate_verify_stat
+
+- name: "[Logrotate] Assert managed configuration state"
+  ansible.builtin.assert:
+    that:
+      - optional_logrotate_verify_stat.stat.exists
+      - optional_logrotate_verify_stat.stat.size | default(0) > 0
+    fail_msg: "The managed logrotate configuration is missing or empty."
+  when: optional_logrotate_enabled | bool
+
+- name: "[Logrotate] Assert disabled configuration is absent"
+  ansible.builtin.assert:
+    that:
+      - not optional_logrotate_verify_stat.stat.exists
+    fail_msg: "The disabled logrotate configuration still exists."
+  when: not (optional_logrotate_enabled | bool)
