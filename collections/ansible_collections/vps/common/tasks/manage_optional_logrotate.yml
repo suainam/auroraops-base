@@ -1,0 +1,5 @@
+---
+- name: Warn that system.logrotate must be deployed separately
+  ansible.builtin.debug:
+    msg: "Deploy system.logrotate separately"
+  when: optional_logrotate_enabled | default(false) | bool
