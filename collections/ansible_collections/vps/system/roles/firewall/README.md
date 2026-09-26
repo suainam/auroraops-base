@@ -32,3 +32,48 @@
 ## 5. 维护与排查
 *   **全量部署**: `make deploy-system.firewall`
 *   **仅更新规则**: 可通过 tags 或手动指定 task 文件（高级用法），但在现有 Makefile 体系下，直接运行 deploy 即可，Ansible 的幂等性会跳过 setup 中未变更的步骤。
+
+## 6. 已知契约：本角色的 `idempotence` 阶段无法达到 `changed=0`
+
+这是一条**已知契约，不是缺陷**，但它必须写明，否则每个读 `docs/lifecycle.md` 的人都会把
+`idempotence` 阶段的红灯当成有东西在漂移。
+
+`setup.yml` 每次 deploy 都执行 `nft flush ruleset`。在本机的 iptables-nft 后端下，
+**ufw 的规则与它的默认策略都存放在这张 nft ruleset 里**，所以 flush 会一并抹掉
+`Default: deny (incoming)`。随后「Configure UFW default policies」必须把它重新应用回去，
+而 `community.general.ufw` 会如实把这次重新应用报成 `changed`。
+
+也就是说：**`changed=0` 对本角色在结构上不可达**，与「是否有东西在漂移」无关。修掉 flush 的
+`changed_when` 只能让 flush 本身诚实上报，消不掉紧随其后的那一次真实变更。
+
+已排除的两个可能解释：
+
+- **不是 `Configure UFW default policies` 的 `when` 用错了快照。** 那个真 bug 已修：它曾读取
+  preflight 在 flush **之前** 的快照，于是 flush 刚抹掉的入站 deny 被判定为「已经是 deny 了」
+  而跳过——fail-open。现在改为 flush **之后** 重读，并且读取失败时倾向「重新应用」而非「假定正确」。
+- **不是「诚实上报就能达成幂等」。** flush 抹掉的东西必须被重放，重放就是变更。
+
+要让 `changed=0` 可达，只能让 flush 变成条件执行（例如仅在 `nftables` 服务曾启用时）。
+本机当前的证据是这次 flush **没有存在理由**：`nft list tables` 里的六张表
+（`ip filter`/`ip6 filter`/`ip nat`/`ip6 nat`/`ip mangle`/`ip raw`）全部是 iptables-nft 模拟
+iptables 用的表，其中没有一行独立 nftables 配置；`nftables` 服务为 `disabled` + `inactive`；
+`/etc/nftables.conf` 是未改动的原版。但弱化公网主机上的防火墙步骤需要单独决策，尚未做。
+
+### 另一条相关事实：`check` 阶段看不到本角色的 `apply` 步骤
+
+`tasks/main.yml` 用 `when: not ansible_check_mode` 包住 `apply.yml`，而 flush、post-flush 重读、
+默认策略重放全部位于 `setup.yml`（`apply.yml` 内）。因此 **`check` 阶段在结构上无法显示这些任务**，
+dry-run 通过不构成「策略会被重放」的证据。要验证这一点只能真跑一次 apply。
+
+## 7. 端口类型无关紧要（归一化在两处）
+
+主机侧的端口清单天然混着两种写法：`firewall_udp_ports_host` 里既有带引号的 Jinja 引用
+（到达时是 `AnsibleUnsafeText`），也有裸整数，而 TCP 清单全是整数。因此：
+
+- `common/tasks/merge_list_vars.yml` 在合并前把每个清单 `map('string')` 归一化，
+  `difference` 的两侧都归一化——否则字符串清单与整数清单相减**什么都不减且不报错**，
+  `_exclude` 里的 `40052` 不会移除计划中的 `'40052'`，防火墙就会静默地关不掉一个被显式排除的端口；
+- 本角色在 `tasks/main.yml` 与 `tasks/verify.yml` 里对输出再次 `map('string')`。
+
+两处都归一化是必要的：`verify.yml` 自建清单，若归一化方式与它所校验的 `deploy` 不同，
+就会对同一台主机给出不同结论。
