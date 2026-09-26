@@ -15,6 +15,21 @@ start)
 
     {% if firewall_hysteria_hopping.enabled %}
     # 1.2 IPv4 NAT - Hysteria Port Hopping
+    #
+    # The rule is matched on the range and the target together, so changing
+    # either one would leave the previous rule in place: iptables evaluates
+    # in order, and a stale broader rule silently keeps winning. Stale rules
+    # that target this port with a different range are removed first.
+    iptables -t nat -S PREROUTING 2>/dev/null | awk -v want="{{ firewall_hysteria_hopping.port_range }}" -v port="{{ firewall_hysteria_hopping.target_port }}" '
+        /REDIRECT/ && /--to-ports/ && $0 ~ ("--to-ports " port "$") {
+          if ($0 !~ ("--dport " want)) {
+            for (i = 1; i <= NF; i++) if ($i == "--to-ports") { target = $(i + 1) }
+            sub(/^-A /, "", $0)
+            print "-D " $0
+          }
+        }' | while read -r drop; do
+      iptables -t nat $drop 2>/dev/null || true
+    done
     iptables -t nat -C PREROUTING -p udp --dport {{ firewall_hysteria_hopping.port_range }} -j REDIRECT --to-ports {{ firewall_hysteria_hopping.target_port }} 2>/dev/null || \
     iptables -t nat -A PREROUTING -p udp --dport {{ firewall_hysteria_hopping.port_range }} -j REDIRECT --to-ports {{ firewall_hysteria_hopping.target_port }}
     {% endif %}
