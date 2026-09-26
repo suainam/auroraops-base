@@ -43,3 +43,10 @@
 - name: Run firewall rules helper
   ansible.builtin.import_tasks: rules.yml
   tags: [deploy, system, firewall, phase1]
+
+# Must run after every flush/reload in this role: the ruleset flush destroys the
+# Docker published-port NAT chains, and later roles in the same play depend on
+# those chains to program container port bindings.
+- name: Reconcile Docker nftables chains after firewall apply
+  ansible.builtin.import_tasks: docker_reconcile.yml
+  tags: [deploy, system, firewall, phase1]

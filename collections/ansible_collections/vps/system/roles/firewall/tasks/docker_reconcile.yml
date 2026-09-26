@@ -1,0 +1,85 @@
+---
+# `nft flush ruleset` wipes the whole ruleset, including the DOCKER chains that
+# the Docker daemon programs for container port publishing. dockerd only (re)builds
+# those chains at daemon start or on a network-setup event, so after a flush every
+# published port silently breaks:
+#
+#   Cannot restart container X: failed to set up container networking:
+#   driver failed programming external connectivity ... Unable to enable DNAT rule:
+#   iptables: No chain/target/match by that name.
+#
+# Relying on the `Restart docker` handler for this is unsafe: it is skipped in
+# check mode, skipped when `docker_service_installed` is not visible to this play,
+# and only fires at end-of-play — after later roles have already tried to publish
+# ports. This block owns the invariant deterministically instead: probe, repair
+# only when actually broken (so the converged state costs nothing), then assert
+# fail-closed.
+
+- name: Detect whether the Docker daemon is running
+  become: true
+  ansible.builtin.command:
+    cmd: systemctl is-active docker
+  register: firewall_docker_service_state
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [deploy, system, firewall, phase1, firewall_apply]
+
+- name: Probe Docker published-port NAT chain
+  become: true
+  ansible.builtin.command:
+    cmd: iptables -t nat -S DOCKER
+  register: firewall_docker_nat_chain_probe
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [deploy, system, firewall, phase1, firewall_apply]
+
+- name: Evaluate whether the Docker NAT chain must be rebuilt
+  ansible.builtin.set_fact:
+    firewall_docker_nat_chain_missing: >-
+      {{
+        (firewall_docker_service_state.stdout | default('') | trim == 'active')
+        and (
+          (firewall_docker_nat_chain_probe.rc | default(1)) != 0
+          or '-N DOCKER' not in (firewall_docker_nat_chain_probe.stdout | default(''))
+        )
+      }}
+  when: not ansible_check_mode
+  tags: [deploy, system, firewall, phase1, firewall_apply]
+
+- name: Rebuild Docker nftables chains destroyed by the ruleset flush
+  become: true
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - firewall_docker_nat_chain_missing | default(false) | bool
+  tags: [deploy, system, firewall, phase1, firewall_apply]
+
+- name: Re-probe Docker published-port NAT chain after rebuild
+  become: true
+  ansible.builtin.command:
+    cmd: iptables -t nat -S DOCKER
+  register: firewall_docker_nat_chain_verify
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - firewall_docker_nat_chain_missing | default(false) | bool
+  tags: [deploy, system, firewall, phase1, firewall_apply]
+
+- name: Assert Docker published-port NAT chain is programmable
+  ansible.builtin.assert:
+    that:
+      - (firewall_docker_service_state.stdout | default('') | trim) != 'active'
+        or '-N DOCKER' in (firewall_docker_nat_chain_verify.stdout
+                           | default(firewall_docker_nat_chain_probe.stdout | default('')))
+    fail_msg: >-
+      Docker is running but its `nat` DOCKER chain is missing after the firewall
+      apply phase, so no container port can be published. Do not leave the host in
+      this state: inspect `iptables -t nat -S DOCKER` and
+      `nft list table ip nat`, then restart docker to reprogram its chains.
+  when: not ansible_check_mode
+  tags: [deploy, system, firewall, phase1, firewall_apply]

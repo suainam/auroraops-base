@@ -14,7 +14,9 @@
       cmd: nft flush ruleset
     changed_when: true
     ignore_errors: true
-    notify: Restart docker
+    # Docker chain restoration is owned by tasks/docker_reconcile.yml, which
+    # repairs deterministically and asserts fail-closed. A handler cannot do
+    # that: it is skipped in check mode and only runs at end-of-play.
     tags: [deploy, system, firewall, phase1, firewall_apply]
 
   - name: Read apt sources list for UFW install
