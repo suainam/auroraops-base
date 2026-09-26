@@ -71,30 +71,39 @@
 # planned port inside it with it. On cc15 that range covers 30071, the WireGuard
 # hub's UDP port, so the guard was one converged deploy away from cutting every
 # peer off the mesh.
+#
+# `namespace()` rather than a plain `{% set out = out | ... %}` inside the loop,
+# because a `set` inside a `for` is scoped to the iteration and does not
+# propagate out. The first version of this task did exactly that and produced
+# `{'tcp': [], 'udp': [<hopping range only>]}` -- the guard appeared to work,
+# every unit test passed, and it silently failed open on exactly the case it was
+# written for. Only the hopping block survived, because it sits outside the loop.
 - name: Expand the planned ports to single ports so a range can be compared
   ansible.builtin.set_fact:
     firewall_planned_ports: >-
-      {%- set out = {'tcp': [], 'udp': []} -%}
-      {%- for spec in (firewall_effective_tcp_ports | default([]))
-                      + (firewall_effective_udp_ports | default([])) -%}
-        {%- set proto = 'tcp' if spec in (firewall_effective_tcp_ports | default([])) else 'udp' -%}
+      {%- set ns = namespace(tcp=[], udp=[]) -%}
+      {%- for spec in (firewall_effective_tcp_ports | default([])) -%}
+        {%- set _ = ns.tcp.append(spec | string) -%}
+      {%- endfor -%}
+      {%- for spec in (firewall_effective_udp_ports | default([])) -%}
         {%- if ':' in (spec | string) -%}
           {%- set lo, hi = (spec | string).split(':') | map('int') | list -%}
-          {%- set out = out | combine({proto: out[proto] + (range(lo, hi + 1) | map('string') | list)}) -%}
+          {%- set _ = ns.udp.append(range(lo, hi + 1) | map('string') | list) -%}
         {%- else -%}
-          {%- set out = out | combine({proto: out[proto] + [spec | string]}) -%}
+          {%- set _ = ns.udp.append(spec | string) -%}
         {%- endif -%}
       {%- endfor -%}
       {%- if firewall_hysteria_hopping.enabled | bool -%}
         {%- set r = (firewall_hysteria_hopping.port_range | string) -%}
         {%- if ':' in r -%}
           {%- set lo, hi = r.split(':') | map('int') | list -%}
-          {%- set out = out | combine({'udp': out['udp'] + (range(lo, hi + 1) | map('string') | list)}) -%}
+          {%- set _ = ns.udp.append(range(lo, hi + 1) | map('string') | list) -%}
         {%- else -%}
-          {%- set out = out | combine({'udp': out['udp'] + [r]}) -%}
+          {%- set _ = ns.udp.append(r) -%}
         {%- endif -%}
       {%- endif -%}
-      {{ out }}
+      {{ {'tcp': ns.tcp | unique | sort,
+          'udp': ns.udp | flatten | unique | sort} }}
   tags: [deploy, system, firewall, phase1, firewall_converge]
 # A declaration states a desired end state, not an action, so a rule that is
 # already absent simply costs nothing and the declaration can stay put.
