@@ -64,7 +64,38 @@
       }}
   tags: [deploy, system, firewall, phase1, firewall_converge]
 
-# --- declared removals -------------------------------------------------------
+# The same list with ranges expanded to single ports, per protocol. A removal
+# target can be a range ("30050:30099") while the plan holds single ports, so
+# comparing the two as strings means "30050:30099/udp" is never found in a list of
+# single-port keys -- the guard passes and the range is deleted, taking every
+# planned port inside it with it. On cc15 that range covers 30071, the WireGuard
+# hub's UDP port, so the guard was one converged deploy away from cutting every
+# peer off the mesh.
+- name: Expand the planned ports to single ports so a range can be compared
+  ansible.builtin.set_fact:
+    firewall_planned_ports: >-
+      {%- set out = {'tcp': [], 'udp': []} -%}
+      {%- for spec in (firewall_effective_tcp_ports | default([]))
+                      + (firewall_effective_udp_ports | default([])) -%}
+        {%- set proto = 'tcp' if spec in (firewall_effective_tcp_ports | default([])) else 'udp' -%}
+        {%- if ':' in (spec | string) -%}
+          {%- set lo, hi = (spec | string).split(':') | map('int') | list -%}
+          {%- set out = out | combine({proto: out[proto] + (range(lo, hi + 1) | map('string') | list)}) -%}
+        {%- else -%}
+          {%- set out = out | combine({proto: out[proto] + [spec | string]}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- if firewall_hysteria_hopping.enabled | bool -%}
+        {%- set r = (firewall_hysteria_hopping.port_range | string) -%}
+        {%- if ':' in r -%}
+          {%- set lo, hi = r.split(':') | map('int') | list -%}
+          {%- set out = out | combine({'udp': out['udp'] + (range(lo, hi + 1) | map('string') | list)}) -%}
+        {%- else -%}
+          {%- set out = out | combine({'udp': out['udp'] + [r]}) -%}
+        {%- endif -%}
+      {%- endif -%}
+      {{ out }}
+  tags: [deploy, system, firewall, phase1, firewall_converge]
 # A declaration states a desired end state, not an action, so a rule that is
 # already absent simply costs nothing and the declaration can stay put.
 - name: Collect the declared removals
@@ -122,27 +153,48 @@
   tags: [deploy, system, firewall, phase1, firewall_converge]
 
 # --- guards -----------------------------------------------------------------
+# Both guards now ask whether any planned port falls *inside* the removal target,
+# rather than whether the target string appears in the plan. That is the
+# difference that matters: "30050:30099/udp" never appears in a list of
+# single-port keys, so the old comparison passed and the range was deleted along
+# with 30071 -- the WireGuard hub's port. Reading the bounds and testing for
+# containment also covers a single port, because for "30052" the lower and upper
+# bound are the same number.
 - name: Refuse to remove a port the current plan still allows
+  vars:
+    _spec: "{{ item.port | string }}"
+    _low: "{{ _spec.split(':')[0] | int }}"
+    _high: "{{ _spec.split(':')[-1] | int }}"
   ansible.builtin.assert:
     that:
-      - (item.port ~ '/' ~ item.proto) not in firewall_desired_pairs
+      - >-
+        (firewall_planned_ports[item.proto] | default([]) | map('int')
+         | select('>=', _low | int) | select('<=', _high | int) | list | length) == 0
     fail_msg: >-
-      Refusing to remove {{ item.port }}/{{ item.proto }}: the current plan
-      still allows it. A removal and an allow for the same port contradict each
-      other, and deleting it would silently undo the plan.
+      Refusing to remove {{ item.port }}/{{ item.proto }}: the current plan still
+      allows {{ firewall_planned_ports[item.proto] | default([]) | map('int')
+                | select('>=', _low | int) | select('<=', _high | int) | list | join(', ') }}.
+      A removal and an allow for the same port contradict each other, and
+      deleting the range would silently undo the plan for every port inside it.
   loop: "{{ (firewall_declared_removals | default([])) + (firewall_converged_removals | default([])) }}"
   loop_control:
     label: "{{ item.port }}/{{ item.proto }} ({{ item.origin }})"
   tags: [deploy, system, firewall, phase1, firewall_converge]
 
 - name: Refuse to remove the active SSH port
+  vars:
+    _spec: "{{ item.port | string }}"
+    _ssh: "{{ ssh_port | int }}"
   ansible.builtin.assert:
     that:
-      - not (item.proto == 'tcp' and item.port == (ssh_port | string))
+      - >-
+        not (item.proto == 'tcp'
+             and _ssh | int >= (_spec.split(':')[0] | int)
+             and _ssh | int <= (_spec.split(':')[-1] | int))
     fail_msg: >-
-      Refusing to remove TCP port {{ item.port }} from {{ item.source }}: that is
-      the active SSH port ({{ ssh_port }}). Locking a host out of its own
-      firewall is not a decision a port list gets to make.
+      Refusing to remove TCP port {{ item.port }} from {{ item.source }}: it
+      covers {{ ssh_port }}, which is the active SSH port. Locking a host out of
+      its own firewall is not a decision a port list gets to make.
   loop: "{{ (firewall_declared_removals | default([])) + (firewall_converged_removals | default([])) }}"
   loop_control:
     label: "{{ item.port }}/{{ item.proto }} ({{ item.origin }})"
