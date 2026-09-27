@@ -38,7 +38,7 @@
 - name: "[Managed Service: Systemd] Render service unit file"
   become: true
   ansible.builtin.template:
-    src: "{{ role_path }}/../../../common/templates/systemd_managed_service.j2"
+    src: "{{ role_path ~ '/../../../common/templates/systemd_managed_service.j2' if (role_path ~ '/../../../common/templates/systemd_managed_service.j2') is file else (role_path ~ '/../../common/templates/systemd_managed_service.j2') }}"
     dest: "/etc/systemd/system/{{ service_name }}.service"
     mode: "0644"
   register: managed_service_systemd_unit
