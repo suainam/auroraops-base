@@ -42,6 +42,8 @@
     service_user: "{{ timer_user | default('root') }}"
     service_type: "oneshot"
     service_restart: "no"
+    service_environment_file: "{{ timer_environment_file | default('') }}"
+    service_environment: "{{ timer_environment | default({}) }}"
   when: managed_timer_init_system == 'systemd'
 
 - name: "[Managed Timer: Systemd] Render timer unit"
