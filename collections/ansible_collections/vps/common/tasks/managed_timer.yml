@@ -29,22 +29,7 @@
 # -----------------------------------------------------------------------------
 # Systemd Implementation (Debian / Ubuntu / VPS)
 # -----------------------------------------------------------------------------
-- name: "[Managed Timer: Systemd] Render underlying service unit"
-  become: true
-  ansible.builtin.template:
-    src: "{{ role_path ~ '/../../../common/templates/systemd_managed_service.j2' if (role_path ~ '/../../../common/templates/systemd_managed_service.j2') is file else (role_path ~ '/../../common/templates/systemd_managed_service.j2') }}"
-    dest: "/etc/systemd/system/{{ timer_name }}.service"
-    mode: "0644"
-  vars:
-    service_name: "{{ timer_name }}"
-    service_description: "{{ timer_description | default(timer_name) }}"
-    service_exec_start: "{{ timer_exec_start }}"
-    service_user: "{{ timer_user | default('root') }}"
-    service_type: "oneshot"
-    service_restart: "no"
-    service_environment_file: "{{ timer_environment_file | default('') }}"
-    service_environment: "{{ timer_environment | default({}) }}"
-  when: managed_timer_init_system == 'systemd'
+  # Underlying service is managed independently by managed_service
 
 - name: "[Managed Timer: Systemd] Render timer unit"
   become: true
