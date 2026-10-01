@@ -1,4 +1,27 @@
 
+  # Mesh ingress is interface- and destination-scoped on purpose. The ports in
+  # firewall_effective_tcp_ports are opened to the world, which is right for a
+  # public service and wrong for an internal one: Sub-Store's read-only alias
+  # answers on 8081 but is only meant to be reachable from the WireGuard mesh.
+  # Listing 8081 in firewall_tcp_ports_host would expose it on eth0, so it is
+  # declared here instead.
+  #
+  # Without this rule the failure is invisible from the sending host: the SYN
+  # reaches the receiver and UFW discards it, so the sender sees its connection
+  # admitted by the tunnel and then time out with no error anywhere it can read.
+  - name: Allow mesh ingress on the tunnel interface
+    become: yes
+    community.general.ufw:
+      rule: allow
+      interface: "{{ firewall_mesh_ingress_interface }}"
+      destination: "{{ firewall_mesh_ingress_destination }}"
+      port: "{{ item | string }}"
+      proto: tcp
+    loop: "{{ firewall_mesh_ingress_tcp_ports | default([]) }}"
+    when:
+      - firewall_mesh_ingress_enabled | default(false) | bool
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
   - name: Allow configured TCP ports
     become: yes
     community.general.ufw:

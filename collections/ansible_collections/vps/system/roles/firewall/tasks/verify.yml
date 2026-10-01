@@ -75,6 +75,33 @@
     fail_msg: "Firewall baseline SSH port {{ firewall_baseline.ssh_port }} does not match active ssh_port {{ ssh_port }}"
   tags: [verify, system, firewall, phase1]
 
+# The mesh rule is scoped, so it is asserted on both the interface and the
+# destination rather than by the bare "8081/tcp" substring the public-port check
+# uses. Substring matching would be satisfied by the docker0 rule that already
+# existed, which is precisely the rule that was in place while every NAT node
+# timed out -- so the check has to be specific enough that the wrong rule cannot
+# stand in for the right one.
+- name: Check mesh ingress ports are allowed on the tunnel interface
+  ansible.builtin.assert:
+    that:
+      # Matches how ufw renders a scoped rule: "<dest> <port>/tcp on <iface>", with
+      # the destination first and the interface qualifier directly after the port.
+      # The ordering matters -- matching on the bare "<port>/tcp on <iface>" would
+      # also accept a rule scoped to the wrong destination.
+      - >-
+        (firewall_mesh_ingress_destination ~ ' ' ~ (item | string) ~ '/tcp on '
+         ~ firewall_mesh_ingress_interface) in ufw_status_result.stdout
+    fail_msg: >-
+      Mesh ingress port {{ item }}/tcp is not allowed on
+      {{ firewall_mesh_ingress_interface }} to {{ firewall_mesh_ingress_destination }}.
+      NAT nodes reach the Sub-Store read-only alias over the tunnel only; without
+      this rule their SYNs are dropped by UFW and the failure looks like a tunnel
+      problem rather than a missing firewall rule.
+  loop: "{{ firewall_mesh_ingress_tcp_ports | default([]) }}"
+  when:
+    - firewall_mesh_ingress_enabled | default(false) | bool
+  tags: [verify, system, firewall, phase1]
+
 - name: Check if configured TCP ports are allowed
   ansible.builtin.assert:
     that:
