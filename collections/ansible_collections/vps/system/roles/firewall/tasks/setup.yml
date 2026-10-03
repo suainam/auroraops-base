@@ -112,7 +112,7 @@
           delaycompress: true
           missingok: true
           notifempty: true
-          postrotate_command: "[ -x /usr/lib/rsyslog/rsyslog-rotate ] && /usr/lib/rsyslog/rsyslog-rotate\n            \ || true"
+          postrotate_command: "[ -x /usr/lib/rsyslog/rsyslog-rotate ] && /usr/lib/rsyslog/rsyslog-rotate || true"
     tags: [deploy, system, firewall, logrotate, phase1, firewall_apply]
 
   - name: Enable IPv4 and IPv6 forwarding

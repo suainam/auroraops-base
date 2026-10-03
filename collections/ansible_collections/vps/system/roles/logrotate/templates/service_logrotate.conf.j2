@@ -1,5 +1,9 @@
 # {{ item.name }} logrotate configuration
+{% if item.log_path is string %}
 {{ item.log_path }} {
+{% else %}
+{{ item.log_path | join(' ') }} {
+{% endif %}
     rotate {{ item.rotate_count | default(7) }}
     {{ "compress" if item.compress | default(true) }}
     {{ "delaycompress" if item.delaycompress | default(true) }}
