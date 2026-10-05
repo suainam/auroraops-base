@@ -2,19 +2,32 @@
   # Mesh ingress is interface- and destination-scoped on purpose. The ports in
   # firewall_effective_tcp_ports are opened to the world, which is right for a
   # public service and wrong for an internal one: Sub-Store's read-only alias
-  # answers on 8081 but is only meant to be reachable from the WireGuard mesh.
-  # Listing 8081 in firewall_tcp_ports_host would expose it on eth0, so it is
-  # declared here instead.
+  # answers on 8081 but is only meant to be reachable from the tunnel or the
+  # container bridge. Listing 8081 in firewall_tcp_ports_host would expose it on
+  # eth0, so it is declared here instead.
   #
   # Without this rule the failure is invisible from the sending host: the SYN
   # reaches the receiver and UFW discards it, so the sender sees its connection
   # admitted by the tunnel and then time out with no error anywhere it can read.
+  #
+  # `direction: in` and `to_ip` are not stylistic. community.general 13.4.0
+  # declares `required_by=dict(interface=("direction",))` and has no `destination`
+  # parameter at all, so the previous `interface` + `destination` spelling could
+  # never have run: it failed with "missing parameter(s) required by 'interface':
+  # direction", and adding `direction` then failed on the unknown `destination`.
+  # The rule therefore existed in the role but had never been converged anywhere.
+  # cc15's live `172.17.0.1 8081/tcp on docker0 ALLOW` rule was made by hand for
+  # the same reason, which is why the host worked and the repository did not.
   - name: Allow mesh ingress on the tunnel interface
     become: yes
     community.general.ufw:
       rule: allow
+      # Required by the module alongside `interface`, and `in` is the only
+      # direction that can receive. Omitting it fails the task, not the host.
+      direction: in
       interface: "{{ firewall_mesh_ingress_interface }}"
-      destination: "{{ firewall_mesh_ingress_destination }}"
+      # The module's name for the rule's destination address.
+      to_ip: "{{ firewall_mesh_ingress_destination }}"
       port: "{{ item | string }}"
       proto: tcp
     loop: "{{ firewall_mesh_ingress_tcp_ports | default([]) }}"
