@@ -1,0 +1,45 @@
+# Provider-owned swap: read-only verification, nothing more.
+#
+# When `swap_mode == 'provider'` the swap is allocated by the hosting provider
+# and is read-only from AuroraOps' point of view. This file therefore observes
+# and asserts; it never creates, resizes, activates or removes anything.
+#
+# Note what this file deliberately does not contain: any task that manages a
+# local on-disk swap area, references the boot table, or activates or deactivates
+# a device. The contract this branch exists to satisfy is that provider mode
+# performs no local swap management at all, so those concerns are absent by
+# construction rather than merely skipped by a condition. Adding one back would
+# mean the role had started doing the provider's job.
+#
+# Why this branch is needed rather than merely nice: the NAT guests have a 1 GiB
+# root and roughly 270 MiB free, and the managed path tries to allocate swap at
+# twice physical memory (384 MiB). That fails with ENOSPC on jp3 and would leave a
+# 1 GiB disk at ~99% even where it succeeded.
+
+- name: Read provider-allocated swap (read-only)
+  ansible.builtin.command: cat /proc/swaps
+  register: provider_swaps
+  changed_when: false
+  tags: [deploy, verify, system, swap, phase0]
+
+- name: Sum provider-allocated swap in KiB
+  ansible.builtin.set_fact:
+    provider_swap_total_kib: >-
+      {{ provider_swaps.stdout_lines[1:] | default([])
+         | map('split') | map('index', 2) | map('int') | sum }}
+  tags: [deploy, verify, system, swap, phase0]
+
+- name: Verify the provider meets the declared minimum
+  ansible.builtin.assert:
+    that:
+      - provider_swap_total_kib | int >= swap_provider_min_kib | int
+    fail_msg: >-
+      swap_mode is 'provider' and the provider has allocated
+      {{ provider_swap_total_kib }} KiB, below the declared minimum of
+      {{ swap_provider_min_kib }} KiB. AuroraOps will not create a local
+      fallback here; raise the provider's allocation or lower
+      swap_provider_min_kib deliberately.
+    success_msg: >-
+      Provider-allocated swap is {{ provider_swap_total_kib }} KiB, at or above
+      the declared minimum. AuroraOps made no local change.
+  tags: [deploy, verify, system, swap, phase0]
