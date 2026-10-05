@@ -10,14 +10,28 @@
   when: auroraops_roles['system']['swap'] | default(true) | bool
   tags: [always, deploy, system, swap]
 
+# Provider-owned swap short-circuits everything below. The preflight reads and
+# the apply writes, and both assume AuroraOps owns a local file; under
+# `swap_mode: provider` that assumption is exactly what must not hold, so the
+# role verifies the provider's allocation and stops there.
+- name: Swap is provider-owned; verify read-only and manage nothing
+  ansible.builtin.import_tasks: provider.yml
+  when:
+    - auroraops_roles['system']['swap'] | default(true) | bool
+    - swap_mode | default('managed') == 'provider'
+  tags: [deploy, system, swap, phase0]
+
 - name: Run swap preflight
   ansible.builtin.import_tasks: preflight.yml
-  when: auroraops_roles['system']['swap'] | default(true) | bool
+  when:
+    - auroraops_roles['system']['swap'] | default(true) | bool
+    - swap_mode | default('managed') != 'provider'
   tags: [deploy, system, swap, phase0]
 
 - name: Apply managed swap changes
   ansible.builtin.import_tasks: apply.yml
   when:
     - auroraops_roles['system']['swap'] | default(true) | bool
+    - swap_mode | default('managed') != 'provider'
     - not ansible_check_mode
   tags: [deploy, system, swap, phase0]
