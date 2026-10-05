@@ -24,9 +24,15 @@
 # Size column cannot be reached by splitting on whitespace. Measured on nat-jp3
 # the provider has allocated 196608 kB and SwapTotal reports it directly.
 - name: Read provider-allocated swap (read-only)
+  # `check_mode: false` because this task only reads /proc/meminfo: it is
+  # genuinely read-only, so running it during a dry run is safe, and it must run
+  # or the assertion below sees an empty result and reports a provider that
+  # allocated nothing. Skipping a read to avoid touching the host is the wrong
+  # trade when the read is what makes the check meaningful.
   ansible.builtin.command: awk '/^SwapTotal/{print $2}' /proc/meminfo
   register: provider_swap_total
   changed_when: false
+  check_mode: false
   tags: [deploy, verify, system, swap, phase0]
 
 - name: Verify the provider meets the declared minimum
