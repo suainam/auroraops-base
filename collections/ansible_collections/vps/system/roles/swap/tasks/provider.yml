@@ -22,11 +22,20 @@
   changed_when: false
   tags: [deploy, verify, system, swap, phase0]
 
+# Summed from the Size column, but parsed with a regex rather than a whitespace
+# split: a provider-allocated area reports its filename as the literal string
+# `none` (measured on nat-jp3: "none  virtual  196608  20232  0"), and that
+# column is separated by spaces, not a tab, so splitting on runs of whitespace
+# discards the empty leading field and shifts Size into the wrong index. Reading
+# SwapTotal from /proc/meminfo instead would have been simpler, but it counts
+# only *active* areas and would miss a provider that has allocated one it has not
+# yet brought up -- which is exactly the case worth reporting.
 - name: Sum provider-allocated swap in KiB
   ansible.builtin.set_fact:
     provider_swap_total_kib: >-
       {{ provider_swaps.stdout_lines[1:] | default([])
-         | map('split') | map('index', 2) | map('int') | sum }}
+         | map('regex_findall', '^\S+\s+\S+\s+([0-9]+)')
+         | map('first') | map('int') | sum }}
   tags: [deploy, verify, system, swap, phase0]
 
 - name: Verify the provider meets the declared minimum
