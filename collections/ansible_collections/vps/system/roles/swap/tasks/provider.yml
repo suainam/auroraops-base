@@ -16,39 +16,30 @@
 # twice physical memory (384 MiB). That fails with ENOSPC on jp3 and would leave a
 # 1 GiB disk at ~99% even where it succeeded.
 
+# SwapTotal from /proc/meminfo, printed as a bare integer by awk so there is no
+# column parsing left to get wrong at the call site.
+#
+# Deliberately not /proc/swaps: a provider-allocated area reports its filename as
+# the literal string `none`, space-separated rather than tab-separated, so the
+# Size column cannot be reached by splitting on whitespace. Measured on nat-jp3
+# the provider has allocated 196608 kB and SwapTotal reports it directly.
 - name: Read provider-allocated swap (read-only)
-  ansible.builtin.command: cat /proc/swaps
-  register: provider_swaps
+  ansible.builtin.command: awk '/^SwapTotal/{print $2}' /proc/meminfo
+  register: provider_swap_total
   changed_when: false
-  tags: [deploy, verify, system, swap, phase0]
-
-# Summed from the Size column, but parsed with a regex rather than a whitespace
-# split: a provider-allocated area reports its filename as the literal string
-# `none` (measured on nat-jp3: "none  virtual  196608  20232  0"), and that
-# column is separated by spaces, not a tab, so splitting on runs of whitespace
-# discards the empty leading field and shifts Size into the wrong index. Reading
-# SwapTotal from /proc/meminfo instead would have been simpler, but it counts
-# only *active* areas and would miss a provider that has allocated one it has not
-# yet brought up -- which is exactly the case worth reporting.
-- name: Sum provider-allocated swap in KiB
-  ansible.builtin.set_fact:
-    provider_swap_total_kib: >-
-      {{ provider_swaps.stdout_lines[1:] | default([])
-         | map('regex_findall', '^\S+\s+\S+\s+([0-9]+)')
-         | map('first') | map('int') | sum }}
   tags: [deploy, verify, system, swap, phase0]
 
 - name: Verify the provider meets the declared minimum
   ansible.builtin.assert:
     that:
-      - provider_swap_total_kib | int >= swap_provider_min_kib | int
+      - (provider_swap_total.stdout | trim | int) >= (swap_provider_min_kib | int)
     fail_msg: >-
       swap_mode is 'provider' and the provider has allocated
-      {{ provider_swap_total_kib }} KiB, below the declared minimum of
-      {{ swap_provider_min_kib }} KiB. AuroraOps will not create a local
-      fallback here; raise the provider's allocation or lower
+      {{ provider_swap_total.stdout | trim | int }} KiB, below the declared
+      minimum of {{ swap_provider_min_kib }} KiB. AuroraOps will not create a
+      local fallback here; raise the provider's allocation or lower
       swap_provider_min_kib deliberately.
     success_msg: >-
-      Provider-allocated swap is {{ provider_swap_total_kib }} KiB, at or above
-      the declared minimum. AuroraOps made no local change.
+      Provider-allocated swap is {{ provider_swap_total.stdout | trim | int }} KiB,
+      at or above the declared minimum. AuroraOps made no local change.
   tags: [deploy, verify, system, swap, phase0]
