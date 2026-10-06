@@ -25,12 +25,8 @@
       echo "Docker not running or not installed, skipping restart"
     fi
   ignore_errors: yes
-  # Deliberately not gated on docker_service_installed. That variable belongs to
-  # the docker role and a firewall run on its own never sets it, so
-  # `| default(false)` skipped this handler -- leaving "nft flush ruleset" with
-  # nothing to restore the rules it had just destroyed. The role was only
-  # self-consistent when the docker role happened to run first in the same play,
-  # which is a hidden inter-role dependency sitting on top of a destructive step.
-  # Docker's own presence is detected in the command above instead, and that
-  # check needs no variable from another role.
-  when: not ansible_check_mode
+  # Avoid repeated restarts in a single run that trip systemd StartLimitBurst (#191).
+  # If docker_reconcile.yml already rebuilt chains and restarted Docker, skip handler.
+  when:
+    - not ansible_check_mode
+    - not (firewall_docker_restarted_in_run | default(false) | bool)

@@ -53,9 +53,18 @@
   ansible.builtin.systemd:
     name: docker
     state: restarted
+  register: firewall_docker_reconcile_restart_result
   when:
     - not ansible_check_mode
     - firewall_docker_nat_chain_missing | default(false) | bool
+  tags: [deploy, system, firewall, phase1, firewall_apply]
+
+- name: Record that Docker was restarted during this run (#191)
+  ansible.builtin.set_fact:
+    firewall_docker_restarted_in_run: true
+  when:
+    - not ansible_check_mode
+    - firewall_docker_reconcile_restart_result is changed
   tags: [deploy, system, firewall, phase1, firewall_apply]
 
 - name: Re-probe Docker published-port NAT chain after rebuild
