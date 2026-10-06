@@ -189,3 +189,15 @@
         or ((ssh_port | string) in (firewall_ufw_status_numbered.stdout | default('')))
       }}
   tags: [deploy, system, firewall, phase1]
+
+- name: Guard against locking host out of SSH via Cloudflare restriction
+  ansible.builtin.assert:
+    that:
+      - (ssh_port | string) not in (firewall_cloudflare_tcp_ports | default([]) | map('string') | list)
+    fail_msg: >-
+      Refusing to restrict SSH port {{ ssh_port }} to Cloudflare IPs! Cloudflare
+      does not proxy SSH connections on this setup, and doing so would permanently
+      lock the host out of remote administration.
+  when:
+    - firewall_cloudflare_ingress_enabled | default(false) | bool
+  tags: [deploy, system, firewall, phase1]
