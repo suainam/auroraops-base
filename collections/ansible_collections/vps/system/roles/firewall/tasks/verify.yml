@@ -26,7 +26,14 @@
 
 - name: Build effective firewall allow lists for verification
   ansible.builtin.set_fact:
-    firewall_effective_tcp_ports: "{{ ((firewall_tcp_ports | default([])) + [ssh_port]) | map('string') | unique | sort }}"
+    firewall_effective_tcp_ports: >-
+      {{
+        ((((firewall_tcp_ports | default([])) | map('string')
+           | difference((firewall_cloudflare_tcp_ports | default([]) | map('string')) if (firewall_cloudflare_ingress_enabled | default(false) | bool) else []))
+          + [ssh_port | string])
+        | unique
+        | sort)
+      }}
     firewall_effective_udp_ports: "{{ (firewall_udp_ports | default([])) | map('string') | unique | sort }}"
   tags: [verify, system, firewall, phase1]
 
@@ -100,6 +107,16 @@
   loop: "{{ firewall_mesh_ingress_tcp_ports | default([]) }}"
   when:
     - firewall_mesh_ingress_enabled | default(false) | bool
+  tags: [verify, system, firewall, phase1]
+
+- name: Check Cloudflare ingress ports are allowed
+  ansible.builtin.assert:
+    that:
+      - ((item | string) + '/tcp') in ufw_status_result.stdout
+    fail_msg: "Cloudflare ingress port {{ item }}/tcp is not allowed in UFW"
+  loop: "{{ firewall_cloudflare_tcp_ports | default([]) }}"
+  when:
+    - firewall_cloudflare_ingress_enabled | default(false) | bool
   tags: [verify, system, firewall, phase1]
 
 - name: Check if configured TCP ports are allowed

@@ -35,6 +35,18 @@
       - firewall_mesh_ingress_enabled | default(false) | bool
     tags: [deploy, system, firewall, phase1, firewall_apply]
 
+  - name: Allow Cloudflare ingress on configured ports
+    become: yes
+    community.general.ufw:
+      rule: allow
+      src: "{{ item.0 }}"
+      port: "{{ item.1 | string }}"
+      proto: tcp
+    loop: "{{ (firewall_cloudflare_ips if (firewall_cloudflare_ips | default([])) else firewall_cloudflare_default_ips) | product(firewall_cloudflare_tcp_ports | default([])) | list }}"
+    when:
+      - firewall_cloudflare_ingress_enabled | default(false) | bool
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
   - name: Allow configured TCP ports
     become: yes
     community.general.ufw:
