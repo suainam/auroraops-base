@@ -19,14 +19,7 @@
 
 - name: Build effective firewall allow lists
   ansible.builtin.set_fact:
-    firewall_effective_tcp_ports: >-
-      {{
-        ((((firewall_tcp_ports | default([])) | map('string')
-           | difference((firewall_cloudflare_tcp_ports | default([]) | map('string')) if (firewall_cloudflare_ingress_enabled | default(false) | bool) else []))
-          + [ssh_port | string])
-        | unique
-        | sort)
-      }}
+    firewall_effective_tcp_ports: "{{ ((((firewall_tcp_ports | default([])) | map('string') | difference((firewall_cloudflare_tcp_ports | default([]) | map('string')) if (firewall_cloudflare_ingress_enabled | default(false) | bool) else [])) + [ssh_port | string]) | unique | sort) }}"
     firewall_effective_udp_ports: "{{ (firewall_udp_ports | default([])) | map('string') | unique | sort }}"
   tags:
   - always
