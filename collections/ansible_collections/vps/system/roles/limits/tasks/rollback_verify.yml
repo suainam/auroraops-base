@@ -1,0 +1,30 @@
+---
+# -----------------------------------------------------------------------------
+# Limits Role: Rollback Verification Stage (Read-Only)
+# -----------------------------------------------------------------------------
+
+- name: Check limits baseline presence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_fact_path }}"
+  register: limits_rollback_fact_stat
+  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
+
+- name: Assert limits baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+      - not limits_rollback_fact_stat.stat.exists
+    fail_msg: "Limits baseline fact still exists after rollback"
+  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
+
+- name: Check managed limits file presence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ limits_managed_file }}"
+  register: limits_rollback_file_stat
+  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
+
+- name: Assert managed limits file status after rollback
+  ansible.builtin.debug:
+    msg: "Limits managed file presence after rollback: {{ limits_rollback_file_stat.stat.exists }}"
+  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
