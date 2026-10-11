@@ -1,0 +1,30 @@
+- name: Bootstrap init rollback_verify with system Python interpreter
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /usr/bin/python3
+  tags:
+  - rollback_verify
+  - system
+  - init
+  - phase0
+
+- name: Check init baseline absence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ init_fact_path }}"
+  register: init_rollback_fact_stat
+  tags:
+  - rollback_verify
+  - system
+  - init
+  - phase0
+
+- name: Assert init baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+    - not init_rollback_fact_stat.stat.exists
+    fail_msg: init baseline fact was not cleaned up during rollback
+  tags:
+  - rollback_verify
+  - system
+  - init
+  - phase0
