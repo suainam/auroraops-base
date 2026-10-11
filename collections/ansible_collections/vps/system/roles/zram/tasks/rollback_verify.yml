@@ -1,0 +1,13 @@
+- name: Check zram baseline absence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zram_fact_path }}"
+  register: zram_rollback_fact_stat
+  tags: [rollback_verify, system, zram, phase0]
+
+- name: Assert zram baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+      - not zram_rollback_fact_stat.stat.exists
+    fail_msg: "zram baseline fact was not cleaned up during rollback"
+  tags: [rollback_verify, system, zram, phase0]
