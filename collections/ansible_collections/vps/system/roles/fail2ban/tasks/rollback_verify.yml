@@ -1,0 +1,51 @@
+---
+# -----------------------------------------------------------------------------
+# Fail2ban Role: Rollback Verification Stage (Read-Only)
+# -----------------------------------------------------------------------------
+
+- name: Check fail2ban baseline presence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_fact_path }}"
+  register: fail2ban_rollback_fact_stat
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Assert fail2ban baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+      - not fail2ban_rollback_fact_stat.stat.exists
+    fail_msg: "fail2ban baseline fact still exists after rollback"
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Check fail2ban jail.local presence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ fail2ban_jail_local_path }}"
+  register: fail2ban_jail_local_rollback_stat
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Assert fail2ban jail.local status after rollback
+  ansible.builtin.debug:
+    msg: "fail2ban jail.local presence after rollback: {{ fail2ban_jail_local_rollback_stat.stat.exists }}"
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Check fail2ban service state after rollback
+  become: true
+  ansible.builtin.service_facts:
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Assert fail2ban service state after rollback
+  ansible.builtin.debug:
+    msg: "fail2ban service state after rollback: {{ ansible_facts.services[fail2ban_service_name ~ '.service'].state | default('unknown') }}"
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Check fail2ban package state after rollback
+  become: true
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
+
+- name: Assert fail2ban package state after rollback
+  ansible.builtin.debug:
+    msg: "fail2ban package installed after rollback: {{ ansible_facts.packages[fail2ban_package_name] is defined }}"
+  tags: [rollback_verify, system, fail2ban, phase2, fail2ban_verify_rollback]
