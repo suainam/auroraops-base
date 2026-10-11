@@ -1,0 +1,13 @@
+- name: Check logrotate baseline absence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ logrotate_fact_path }}"
+  register: logrotate_rollback_fact_stat
+  tags: [rollback_verify, system, logrotate, phase1]
+
+- name: Assert logrotate baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+      - not logrotate_rollback_fact_stat.stat.exists
+    fail_msg: "logrotate baseline fact was not cleaned up during rollback"
+  tags: [rollback_verify, system, logrotate, phase1]
