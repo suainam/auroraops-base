@@ -129,7 +129,7 @@
 
 - name: 验证 dnsutils 提供的 nslookup 可用
   become: true
-  ansible.builtin.command: nslookup localhost
+  ansible.builtin.command: nslookup -timeout=5 -retry=2 one.one.one.one
   changed_when: false
   tags:
   - verify
