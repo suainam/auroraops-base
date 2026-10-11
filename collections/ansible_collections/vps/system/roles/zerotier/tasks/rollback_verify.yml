@@ -1,0 +1,13 @@
+- name: Check zerotier baseline absence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ zerotier_fact_path }}"
+  register: zerotier_rollback_fact_stat
+  tags: [rollback_verify, system, zerotier, phase3]
+
+- name: Assert zerotier baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+      - not zerotier_rollback_fact_stat.stat.exists
+    fail_msg: "zerotier baseline fact was not cleaned up during rollback"
+  tags: [rollback_verify, system, zerotier, phase3]
