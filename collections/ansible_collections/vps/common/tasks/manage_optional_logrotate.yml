@@ -19,12 +19,12 @@
     that:
       - optional_logrotate_owner is defined and optional_logrotate_owner | length > 0
       - optional_logrotate_enabled is defined
-      - optional_logrotate_config_path is defined and optional_logrotate_config_path is match('^/etc/logrotate\.d/auroraops-')
+      - optional_logrotate_config_path is defined and optional_logrotate_config_path is match('^/etc/logrotate\.d/[a-zA-Z0-9_-]+$')
       - optional_logrotate_config is defined and optional_logrotate_config | length > 0
-      - (optional_logrotate_legacy_paths | default([])) | select('match', '^/etc/logrotate\.d/auroraops-') | list | length == (optional_logrotate_legacy_paths | default([])) | length
+      - (optional_logrotate_legacy_paths | default([])) | select('match', '^/etc/logrotate\.d/[a-zA-Z0-9_-]+$') | list | length == (optional_logrotate_legacy_paths | default([])) | length
     fail_msg: >-
       manage_optional_logrotate requires owner, enabled, a config path and all
-      legacy paths confined to the managed /etc/logrotate.d/auroraops- namespace.
+      legacy paths confined to /etc/logrotate.d/.
 
 - name: "[Logrotate] Remove disabled managed configuration"
   become: true
@@ -46,7 +46,37 @@
   ansible.builtin.copy:
     content: |
       # Managed by AuroraOps: {{ optional_logrotate_owner }}
+      {% if optional_logrotate_config is mapping %}
+      {{ optional_logrotate_config.log_path is string | ternary(optional_logrotate_config.log_path, (optional_logrotate_config.log_path | join(' '))) }} {
+          {{ optional_logrotate_config.interval | default('daily') }}
+          rotate {{ optional_logrotate_config.rotate_count | default(7) }}
+      {% if optional_logrotate_config.compress | default(true) %}
+          compress
+      {% endif %}
+      {% if optional_logrotate_config.delaycompress | default(true) %}
+          delaycompress
+      {% endif %}
+      {% if optional_logrotate_config.missingok | default(true) %}
+          missingok
+      {% endif %}
+      {% if optional_logrotate_config.notifempty | default(true) %}
+          notifempty
+      {% endif %}
+      {% if optional_logrotate_config.copytruncate | default(false) %}
+          copytruncate
+      {% endif %}
+      {% if optional_logrotate_config.su_owner is defined and optional_logrotate_config.su_group is defined %}
+          su {{ optional_logrotate_config.su_owner }} {{ optional_logrotate_config.su_group }}
+      {% endif %}
+      {% if optional_logrotate_config.postrotate_script is defined and optional_logrotate_config.postrotate_script | length > 0 %}
+          postrotate
+              {{ optional_logrotate_config.postrotate_script | indent(8) }}
+          endscript
+      {% endif %}
+      }
+      {% else %}
       {{ optional_logrotate_config }}
+      {% endif %}
     dest: "{{ optional_logrotate_config_path }}"
     mode: "0644"
   when: optional_logrotate_enabled | bool
