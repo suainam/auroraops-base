@@ -86,9 +86,11 @@ def test_optional_logrotate_config_path_guard_accepts_only_managed_paths() -> No
     assert config_path_guard(f"{MANAGED_PREFIX}sub-store") is True
 
     # System-critical and hand-maintained paths are rejected.
+    # System-critical, nested, and invalid paths are rejected.
     assert config_path_guard("/etc/logrotate.conf") is False
     assert config_path_guard("/etc/logrotate.d") is False
-    assert config_path_guard("/etc/logrotate.d/hand-written") is False
+    assert config_path_guard("/etc/logrotate.d/nested/path") is False
+    assert config_path_guard("/etc/logrotate.d/invalid path with spaces") is False
     assert config_path_guard("/etc/cron.d/auroraops-evil") is False
     assert config_path_guard("/var/log/auroraops-anything") is False
     assert config_path_guard("relative/path") is False

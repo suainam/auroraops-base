@@ -100,6 +100,22 @@
   loop: "{{ firewall_mesh_ingress_tcp_ports | default([]) }}"
   when:
     - firewall_mesh_ingress_enabled | default(false) | bool
+    - firewall_mesh_ingress_interface is defined
+    - firewall_mesh_ingress_destination is defined
+  tags: [verify, system, firewall, phase1]
+
+- name: Check mesh ingress rules are allowed on specified interface and destination
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.destination ~ ' ' ~ (item.port | string) ~ '/' ~ (item.proto | default('tcp')) ~ ' on '
+         ~ item.interface) in ufw_status_result.stdout
+    fail_msg: >-
+      Mesh ingress rule for port {{ item.port }}/{{ item.proto | default('tcp') }} on
+      {{ item.interface }} to {{ item.destination }} is not allowed in UFW.
+  loop: "{{ firewall_mesh_ingress_rules | default([]) }}"
+  when:
+    - firewall_mesh_ingress_enabled | default(false) | bool
   tags: [verify, system, firewall, phase1]
 
 - name: Check Cloudflare ingress ports are allowed

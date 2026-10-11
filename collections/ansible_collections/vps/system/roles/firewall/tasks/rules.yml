@@ -34,6 +34,20 @@
     when:
       - firewall_mesh_ingress_enabled | default(false) | bool
     tags: [deploy, system, firewall, phase1, firewall_apply]
+  - name: Allow mesh ingress rules on specified interface and destination
+    become: yes
+    community.general.ufw:
+      rule: allow
+      direction: in
+      interface: "{{ item.interface }}"
+      to_ip: "{{ item.destination }}"
+      port: "{{ item.port | string }}"
+      proto: "{{ item.proto | default('tcp') }}"
+    loop: "{{ firewall_mesh_ingress_rules | default([]) }}"
+    when:
+      - firewall_mesh_ingress_enabled | default(false) | bool
+    tags: [deploy, system, firewall, phase1, firewall_apply]
+
 
   - name: Allow Cloudflare ingress on configured ports
     become: yes

@@ -23,6 +23,9 @@ firewall_udp_ports_host: []
 firewall_udp_ports_exclude: []
 
 
+firewall_mesh_ingress_enabled: false
+firewall_mesh_ingress_rules: []
+
 # ===========================================
 # Cloudflare Ingress 限制
 # ===========================================
