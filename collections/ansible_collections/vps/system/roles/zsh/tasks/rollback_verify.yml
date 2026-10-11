@@ -1,0 +1,20 @@
+- name: 验证 root 默认 shell 为 bash 或原始 shell (回滚验证)
+  ansible.builtin.command: getent passwd root
+  register: zsh_rollback_passwd
+  changed_when: false
+  failed_when: zsh_rollback_passwd.stdout.split(':')[-1] == '/bin/zsh'
+  tags: [rollback_verify, personalization, zsh, phase2]
+
+- name: 验证 Zinit 目录已清理
+  ansible.builtin.stat:
+    path: /root/.local/share/zinit
+  register: zsh_rollback_zinit
+  failed_when: zsh_rollback_zinit.stat.exists
+  tags: [rollback_verify, personalization, zsh, phase2]
+
+- name: 验证 .zshrc 已清理
+  ansible.builtin.stat:
+    path: /root/.zshrc
+  register: zsh_rollback_zshrc
+  failed_when: zsh_rollback_zshrc.stat.exists
+  tags: [rollback_verify, personalization, zsh, phase2]
