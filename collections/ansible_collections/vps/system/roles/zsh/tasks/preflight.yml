@@ -1,0 +1,19 @@
+---
+- name: Check zsh package availability
+  become: true
+  ansible.builtin.command: which zsh
+  register: zsh_preflight_check
+  failed_when: false
+  changed_when: false
+  tags: [preflight, personalization, zsh, phase2]
+
+- name: Check root user shell in /etc/passwd
+  ansible.builtin.getent:
+    database: passwd
+    key: root
+  tags: [preflight, personalization, zsh, phase2]
+
+- name: Display preflight summary for zsh
+  ansible.builtin.debug:
+    msg: "Zsh installed={{ zsh_preflight_check.rc == 0 }} CurrentShell={{ getent_passwd.root[5] }}"
+  tags: [preflight, personalization, zsh, phase2]
