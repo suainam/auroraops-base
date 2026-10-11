@@ -1,0 +1,18 @@
+---
+# -----------------------------------------------------------------------------
+# Base Role: Rollback Verification Stage (Read-Only)
+# -----------------------------------------------------------------------------
+
+- name: Check base baseline absence after rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ base_fact_path }}"
+  register: base_rollback_fact_stat
+  tags: [rollback_verify, system, base, phase0, base_verify_rollback]
+
+- name: Assert base baseline fact was cleaned up after successful rollback
+  ansible.builtin.assert:
+    that:
+      - not base_rollback_fact_stat.stat.exists
+    fail_msg: "base baseline fact still exists after rollback"
+  tags: [rollback_verify, system, base, phase0, base_verify_rollback]
