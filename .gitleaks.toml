@@ -1,0 +1,8 @@
+title = "AuroraOps gitleaks config"
+
+[allowlist]
+  description = "Ansible vault ciphertext is encrypted at rest"
+  regexes = [
+    '''^\$ANSIBLE_VAULT;''',
+    '''\{\{.*?\}\}''',
+  ]
