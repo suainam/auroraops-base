@@ -31,5 +31,5 @@
 ## 依赖与边界
 - 角色只接管 `/etc/logrotate.conf` 的 `rotate`/`compress` 与 `/etc/logrotate.d/` 下由 `logrotate_configs_to_deploy` 生成的服务配置；不安装 logrotate 自身，依赖基础系统已存在并启用 logrotate。
 - 基线持久化依赖目录 `/etc/ansible/facts.d`（由本角色首次运行时创建）。
-- 需要在声明 `logrotate_configs_to_deploy` 的上游角色之前收敛（converge），否则服务轮转配置缺失。
-- 回滚依赖基线 fact 文件存在；缺失时拒绝回滚。
+- 服务轮转配置来自 `logrotate_configs_to_deploy`（默认 `[]`），需在本角色运行前于 inventory/vars 中声明；上游角色（如 `system.firewall`）在 `tasks/setup.yml` 中提供该项，晚于本角色收敛会导致其服务配置缺失。
+- 回滚依赖基线 fact 文件存在；基线缺失且 `/etc/logrotate.conf` 仍存在时拒绝回滚，基线缺失且无受管文件时则跳过（`tasks/rollback.yml`）。
