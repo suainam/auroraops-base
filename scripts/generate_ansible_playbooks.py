@@ -92,7 +92,6 @@ ROLE_PHASE_MAP = {
     'container_deployer': 'phase5',
     'dailycheckin': 'phase5',
     'docker_apps': 'phase5',
-    'ip2free_gateway': 'phase5',
     'openclaw': 'phase5',
     'openviking': 'phase5',
 
@@ -152,7 +151,6 @@ EXTRA_ROLE_TAGS = {
         'ansibletest_result',     # 查看结果
         'ansibletest_cleanup'     # 清理环境
     ],
-    'ip2free_gateway': ['ip2free_gateway_install', 'ip2free_gateway_config'],
     'qmd': ['qmd_install', 'qmd_links', 'qmd_verify', 'qmd_rollback'],
     # 'openclaw': ['openclaw_check', 'openclaw_config', 'openclaw_auth', 'openclaw_telegram', 'openclaw_verify'],
     'openviking': ['openviking_install', 'openviking_config', 'openviking_verify'],
