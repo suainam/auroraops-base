@@ -27,3 +27,9 @@
 - 查看服务配置：`sudo ls -l /etc/logrotate.d`
 - 强制轮转：`logrotate -f /etc/logrotate.conf`
 - 调试服务配置：`logrotate -d /etc/logrotate.d/<service_name>`
+
+## 依赖与边界
+- 角色只接管 `/etc/logrotate.conf` 的 `rotate`/`compress` 与 `/etc/logrotate.d/` 下由 `logrotate_configs_to_deploy` 生成的服务配置；不安装 logrotate 自身，依赖基础系统已存在并启用 logrotate。
+- 基线持久化依赖目录 `/etc/ansible/facts.d`（由本角色首次运行时创建）。
+- `logrotate_configs_to_deploy` 默认 `[]`，由调用方通过 `include_role` 的 `vars:` 传入（如 `vps.system.firewall` 的 `tasks/setup.yml` 传入 ufw），或由 inventory/vars 提供；每次调用只部署当次传入的条目。
+- 回滚依赖基线 fact 文件存在；基线缺失且 `/etc/logrotate.conf` 仍存在时拒绝回滚，基线缺失且无受管文件时则跳过（`tasks/rollback.yml`）。
