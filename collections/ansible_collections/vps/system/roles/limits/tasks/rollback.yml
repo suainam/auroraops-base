@@ -76,10 +76,3 @@
     - not (limits_baseline.pre_deploy_file_exists | bool)
   tags: [rollback, system, limits, phase0, limits_remove_managed_file]
 
-- name: Remove limits baseline after successful rollback
-  become: true
-  ansible.builtin.file:
-    path: "{{ limits_fact_path }}"
-    state: absent
-  when: limits_fact_stat.stat.exists
-  tags: [rollback, system, limits, phase0, limits_remove_baseline]

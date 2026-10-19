@@ -110,10 +110,3 @@
     - not (journald_baseline.pre_deploy_dir_exists | bool)
   tags: [rollback, system, journald, phase0, journald_remove_dir]
 
-- name: Remove journald baseline after successful rollback
-  become: true
-  ansible.builtin.file:
-    path: "{{ journald_fact_path }}"
-    state: absent
-  when: journald_fact_stat.stat.exists
-  tags: [rollback, system, journald, phase0, journald_remove_baseline]

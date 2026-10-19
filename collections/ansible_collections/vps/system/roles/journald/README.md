@@ -17,10 +17,11 @@
 | `journald_forward_to_syslog` | `no` | 是否转发到 syslog。 |
 
 ## 3. 内部逻辑
-- **生命周期结构**: `preflight -> apply -> verify -> rollback`，`check` 只跑只读 preflight。
+- **生命周期结构**: `preflight -> apply -> verify -> rollback -> rollback_verify`，`check` 只跑只读 preflight。
 - **基线持久化**: 部署前把 `journald_managed_dir` / `journald_managed_file` 的原始状态写入 `journald_fact_path`。
 - **受管边界**: 只接管 role 自己的 `journald_managed_file`，不改别的 journald 配置入口。
 - **回滚语义**: 若部署前该 override 文件已存在，则按基线恢复原内容；若原先不存在，则删除 role 自己创建的文件和目录。
+- **独立回滚核验**: rollback 保留 baseline；只读 `rollback_verify` 核对原文件存在性、内容及目录存在性、权限。缺少 baseline 时失败，不以清理证据代替恢复核验。
 - **资源优化**: 默认设置 `SystemMaxUse=10M`、`Storage=persistent`、`ForwardToSyslog=no` 等 journald 参数。
 
 ## 4. 依赖关系

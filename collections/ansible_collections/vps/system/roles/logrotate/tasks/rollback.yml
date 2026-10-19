@@ -68,6 +68,17 @@
   notify: Force logrotate
   tags: [rollback, system, logrotate, phase1, logrotate_restore_main]
 
+- name: Remove logrotate main file when absent before deploy
+  become: true
+  ansible.builtin.file:
+    path: "{{ logrotate_managed_file }}"
+    state: absent
+  when:
+    - logrotate_fact_stat.stat.exists
+    - not (logrotate_baseline.pre_deploy_main_exists | bool)
+  notify: Force logrotate
+  tags: [rollback, system, logrotate, phase1]
+
 - name: Remove service config files absent before deploy
   become: true
   ansible.builtin.file:
@@ -99,10 +110,3 @@
   notify: Force logrotate
   tags: [rollback, system, logrotate, phase1, logrotate_restore_service_configs]
 
-- name: Remove logrotate baseline after successful rollback
-  become: true
-  ansible.builtin.file:
-    path: "{{ logrotate_fact_path }}"
-    state: absent
-  when: logrotate_fact_stat.stat.exists
-  tags: [rollback, system, logrotate, phase1, logrotate_remove_baseline]

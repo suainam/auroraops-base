@@ -17,7 +17,7 @@
 - `check` 只跑只读 preflight。
 - deploy 前必须先写入 `logrotate_fact_path`。
 - verify 同时验证 deploy 结果和 rollback 前提。
-- rollback 成功后删除 `logrotate_fact_path`。
+- rollback 保留 `logrotate_fact_path`；只读 `rollback_verify` 独立核对主配置和受管服务配置的原存在性与内容，缺少 baseline 时失败。
 - role 只接管 `/etc/logrotate.conf` 中自己的 `rotate` / `compress` 修改，以及本轮 `logrotate_configs_to_deploy` 对应的服务配置文件。
 - rollback 恢复部署前的主配置内容，并按基线恢复或删除服务配置文件。
 
