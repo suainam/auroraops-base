@@ -1,13 +1,109 @@
-- name: Check logrotate baseline absence after rollback
+---
+- name: Read logrotate rollback baseline
   become: true
-  ansible.builtin.stat:
-    path: "{{ logrotate_fact_path }}"
-  register: logrotate_rollback_fact_stat
-  tags: [rollback_verify, system, logrotate, phase1]
-
-- name: Assert logrotate baseline fact was cleaned up after successful rollback
+  ansible.builtin.slurp:
+    path: '{{ logrotate_fact_path }}'
+  register: logrotate_verify_raw
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Parse logrotate rollback baseline
+  ansible.builtin.set_fact:
+    logrotate_baseline: '{{ logrotate_verify_raw.content | b64decode | from_json }}'
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Validate logrotate rollback baseline
   ansible.builtin.assert:
     that:
-      - not logrotate_rollback_fact_stat.stat.exists
-    fail_msg: "logrotate baseline fact was not cleaned up during rollback"
-  tags: [rollback_verify, system, logrotate, phase1]
+    - logrotate_baseline.auroraops_managed | bool
+    - logrotate_baseline.version | int >= 1
+    - logrotate_baseline.managed_file == logrotate_managed_file
+    - logrotate_baseline.managed_dir == logrotate_managed_dir
+    fail_msg: Rollback baseline does not describe the managed configuration
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Inspect restored logrotate file
+  become: true
+  ansible.builtin.stat:
+    path: '{{ logrotate_managed_file }}'
+  register: logrotate_verify_file
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Assert restored logrotate file presence
+  ansible.builtin.assert:
+    that:
+    - logrotate_verify_file.stat.exists == (logrotate_baseline.pre_deploy_main_exists | bool)
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Read restored logrotate content
+  become: true
+  ansible.builtin.slurp:
+    path: '{{ logrotate_managed_file }}'
+  register: logrotate_verify_content
+  when: logrotate_baseline.pre_deploy_main_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Assert restored logrotate content
+  ansible.builtin.assert:
+    that:
+    - (logrotate_verify_content.content | b64decode) == logrotate_baseline.pre_deploy_main_content
+  when: logrotate_baseline.pre_deploy_main_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Inspect restored logrotate service files
+  become: true
+  ansible.builtin.stat:
+    path: '{{ logrotate_managed_dir }}/{{ item.key }}'
+  loop: '{{ logrotate_baseline.service_configs | dict2items }}'
+  register: logrotate_verify_services
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Assert restored logrotate service file presence
+  ansible.builtin.assert:
+    that:
+    - item.stat.exists == (item.item.value.exists | bool)
+  loop: '{{ logrotate_verify_services.results }}'
+  loop_control:
+    label: '{{ item.item.key }}'
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Read restored logrotate service content
+  become: true
+  ansible.builtin.slurp:
+    path: '{{ logrotate_managed_dir }}/{{ item.key }}'
+  loop: '{{ logrotate_baseline.service_configs | dict2items }}'
+  when: item.value.exists | bool
+  register: logrotate_verify_service_content
+  tags:
+  - rollback_verify
+  - system
+  - logrotate
+- name: Assert restored logrotate service content
+  ansible.builtin.assert:
+    that:
+    - (item.content | b64decode) == item.item.value.content
+  loop: '{{ logrotate_verify_service_content.results }}'
+  when: not (item.skipped | default(false))
+  loop_control:
+    label: '{{ item.item.key }}'
+  tags:
+  - rollback_verify
+  - system
+  - logrotate

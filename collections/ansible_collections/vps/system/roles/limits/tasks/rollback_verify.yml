@@ -1,30 +1,64 @@
 ---
-# -----------------------------------------------------------------------------
-# Limits Role: Rollback Verification Stage (Read-Only)
-# -----------------------------------------------------------------------------
-
-- name: Check limits baseline presence after rollback
+- name: Read limits rollback baseline
   become: true
-  ansible.builtin.stat:
-    path: "{{ limits_fact_path }}"
-  register: limits_rollback_fact_stat
-  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
-
-- name: Assert limits baseline fact was cleaned up after successful rollback
+  ansible.builtin.slurp:
+    path: '{{ limits_fact_path }}'
+  register: limits_verify_raw
+  tags:
+  - rollback_verify
+  - system
+  - limits
+- name: Parse limits rollback baseline
+  ansible.builtin.set_fact:
+    limits_baseline: '{{ limits_verify_raw.content | b64decode | from_json }}'
+  tags:
+  - rollback_verify
+  - system
+  - limits
+- name: Validate limits rollback baseline
   ansible.builtin.assert:
     that:
-      - not limits_rollback_fact_stat.stat.exists
-    fail_msg: "Limits baseline fact still exists after rollback"
-  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
-
-- name: Check managed limits file presence after rollback
+    - limits_baseline.auroraops_managed | bool
+    - limits_baseline.version | int >= 1
+    - limits_baseline.managed_file == limits_managed_file
+    fail_msg: Rollback baseline does not describe the managed configuration
+  tags:
+  - rollback_verify
+  - system
+  - limits
+- name: Inspect restored limits file
   become: true
   ansible.builtin.stat:
-    path: "{{ limits_managed_file }}"
-  register: limits_rollback_file_stat
-  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
-
-- name: Assert managed limits file status after rollback
-  ansible.builtin.debug:
-    msg: "Limits managed file presence after rollback: {{ limits_rollback_file_stat.stat.exists }}"
-  tags: [rollback_verify, system, limits, phase1, limits_verify_rollback]
+    path: '{{ limits_managed_file }}'
+  register: limits_verify_file
+  tags:
+  - rollback_verify
+  - system
+  - limits
+- name: Assert restored limits file presence
+  ansible.builtin.assert:
+    that:
+    - limits_verify_file.stat.exists == (limits_baseline.pre_deploy_file_exists | bool)
+  tags:
+  - rollback_verify
+  - system
+  - limits
+- name: Read restored limits content
+  become: true
+  ansible.builtin.slurp:
+    path: '{{ limits_managed_file }}'
+  register: limits_verify_content
+  when: limits_baseline.pre_deploy_file_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - limits
+- name: Assert restored limits content
+  ansible.builtin.assert:
+    that:
+    - (limits_verify_content.content | b64decode) == limits_baseline.pre_deploy_content
+  when: limits_baseline.pre_deploy_file_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - limits

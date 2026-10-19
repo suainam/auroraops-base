@@ -1,0 +1,92 @@
+---
+- name: Read journald rollback baseline
+  become: true
+  ansible.builtin.slurp:
+    path: '{{ journald_fact_path }}'
+  register: journald_verify_raw
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Parse journald rollback baseline
+  ansible.builtin.set_fact:
+    journald_baseline: '{{ journald_verify_raw.content | b64decode | from_json }}'
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Validate journald rollback baseline
+  ansible.builtin.assert:
+    that:
+    - journald_baseline.auroraops_managed | bool
+    - journald_baseline.version | int >= 1
+    - journald_baseline.managed_file == journald_managed_file
+    - journald_baseline.managed_dir == journald_managed_dir
+    fail_msg: Rollback baseline does not describe the managed configuration
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Inspect restored journald file
+  become: true
+  ansible.builtin.stat:
+    path: '{{ journald_managed_file }}'
+  register: journald_verify_file
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Assert restored journald file presence
+  ansible.builtin.assert:
+    that:
+    - journald_verify_file.stat.exists == (journald_baseline.pre_deploy_file_exists | bool)
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Read restored journald content
+  become: true
+  ansible.builtin.slurp:
+    path: '{{ journald_managed_file }}'
+  register: journald_verify_content
+  when: journald_baseline.pre_deploy_file_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Assert restored journald content
+  ansible.builtin.assert:
+    that:
+    - (journald_verify_content.content | b64decode) == journald_baseline.pre_deploy_content
+  when: journald_baseline.pre_deploy_file_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Inspect restored journald directory
+  become: true
+  ansible.builtin.stat:
+    path: '{{ journald_managed_dir }}'
+  register: journald_verify_dir
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Assert restored journald directory presence
+  ansible.builtin.assert:
+    that:
+    - journald_verify_dir.stat.exists == (journald_baseline.pre_deploy_dir_exists | bool)
+  tags:
+  - rollback_verify
+  - system
+  - journald
+- name: Assert restored journald directory mode
+  ansible.builtin.assert:
+    that:
+    - journald_verify_dir.stat.isdir
+    - journald_verify_dir.stat.mode == (journald_baseline.pre_deploy_dir_mode | default('0755'))
+  when: journald_baseline.pre_deploy_dir_exists | bool
+  tags:
+  - rollback_verify
+  - system
+  - journald

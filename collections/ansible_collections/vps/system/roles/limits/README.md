@@ -13,7 +13,7 @@
 ## 3. 内部逻辑
 - `check` 只跑只读 preflight。
 - deploy 前必须先写入 `limits_fact_path`。
-- rollback 仅恢复或删除角色自己管理的 `limits_managed_file`，再清理 baseline。
+- rollback 仅恢复或删除角色自己管理的 `limits_managed_file`，保留 baseline；只读 `rollback_verify` 独立核对原文件存在性和内容，缺少 baseline 时失败。
 - verify 同时验证 deploy 结果和 rollback 前提。
 - 只接管 `limits_managed_file`，不改其他 PAM 或 shell 限制入口。
 - 遇到已有同路径文件时，先读取为基线，再按 rollback 语义恢复。
