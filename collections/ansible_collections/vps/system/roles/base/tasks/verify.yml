@@ -47,7 +47,7 @@
 - name: Determine Optimized DNS Nameservers for verification
   ansible.builtin.set_fact:
     optimized_dns_servers: >-
-      {{ ['223.5.5.5', '119.29.29.29'] if (performance.geo.country | default('UNKNOWN') == 'CN') else ['8.8.8.8', '1.1.1.1'] }}
+      {{ dns_servers if (dns_servers is defined and dns_servers | length > 0) else (['223.5.5.5', '119.29.29.29'] if (performance.geo.country | default('UNKNOWN') == 'CN') else ['8.8.8.8', '1.1.1.1']) }}
   tags: [verify, system, base, base_verify_dns, phase0]
 
 - name: 检查 DNS 解析服务器条目
@@ -59,12 +59,12 @@
   tags: [verify, system, base, base_verify_dns, phase0]
 
 - name: 验证 DNS 解析功能 (nslookup 或 getent)
-  ansible.builtin.command: getent ahosts google.com
+  ansible.builtin.command: >-
+    getent ahosts {{ 'qq.com' if ('223.5.5.5' in optimized_dns_servers or '119.29.29.29' in optimized_dns_servers or '183.60.83.19' in optimized_dns_servers) else 'google.com' }}
   register: _dns_resolv_test
   changed_when: false
   failed_when: _dns_resolv_test.rc != 0
   tags: [verify, system, base, base_verify_dns, phase0]
-
 - name: 验证非必要服务已禁用且被屏蔽
   become: true
   ansible.builtin.service_facts:
