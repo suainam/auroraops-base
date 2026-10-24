@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ timer_name }}</string>
+    <key>ProgramArguments</key>
+    <array>
+{% if timer_exec_args is defined and timer_exec_args is sequence %}
+{% for arg in timer_exec_args %}
+        <string>{{ arg }}</string>
+{% endfor %}
+{% else %}
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>{{ timer_exec_start }}</string>
+{% endif %}
+    </array>
+{% if timer_interval_seconds is defined and timer_interval_seconds | int > 0 %}
+    <key>StartInterval</key>
+    <integer>{{ timer_interval_seconds | int }}</integer>
+{% elif timer_schedule is defined and timer_schedule == 'hourly' %}
+    <key>StartInterval</key>
+    <integer>3600</integer>
+{% elif timer_schedule is defined and timer_schedule == 'daily' %}
+    <key>StartInterval</key>
+    <integer>86400</integer>
+{% endif %}
+{% if timer_log_dir is defined and timer_log_dir | length > 0 %}
+    <key>StandardOutPath</key>
+    <string>{{ timer_log_dir }}/{{ timer_name }}.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ timer_log_dir }}/{{ timer_name }}.log</string>
+{% endif %}
+</dict>
+</plist>

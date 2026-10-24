@@ -1,13 +1,18 @@
 ---
-# Universal Managed Timer Task Library (Systemd vs Alpine Crond)
+# Universal Managed Timer Task Library (Systemd vs Alpine Crond vs Darwin LaunchAgent)
 # Parameters:
 #   timer_name: (string, required) unique timer name without extension
 #   timer_description: (string, optional) description of the periodic job
 #   timer_exec_start: (string, required) command to execute periodically
+#   timer_exec_args: (list, optional) explicit argument list for execve
 #   timer_schedule: (string, optional, default: 'daily') e.g. 'daily', 'hourly', '0 3 * * *'
+#   timer_interval_seconds: (int, optional) periodicity in seconds (used on Darwin)
 #   timer_user: (string, optional, default: 'root')
 #   timer_state: (string, optional, default: 'started')
 #   timer_enabled: (bool, optional, default: true)
+#   timer_log_dir: (string, optional) directory for stdout/stderr logs on Darwin
+#   timer_init_system: (string, optional) explicit override ('darwin', 'systemd', 'openrc')
+#   timer_delegate_to: (string, optional) host to delegate tasks to (default 'localhost' for Darwin)
 
 - name: "[Managed Timer] Assert required parameters"
   ansible.builtin.assert:
@@ -20,17 +25,23 @@
   ansible.builtin.set_fact:
     managed_timer_init_system: >-
       {{
-        'openrc'
-        if (ansible_facts.distribution | default(ansible_distribution | default('')) == 'Alpine'
-            or ansible_service_mgr | default('') == 'openrc')
-        else 'systemd'
+        timer_init_system
+        if (timer_init_system is defined and timer_init_system | length > 0)
+        else (
+          'darwin'
+          if (ansible_facts.os_family | default(ansible_os_family | default('')) == 'Darwin')
+          else (
+            'openrc'
+            if (ansible_facts.distribution | default(ansible_distribution | default('')) == 'Alpine'
+                or ansible_service_mgr | default('') == 'openrc')
+            else 'systemd'
+          )
+        )
       }}
 
 # -----------------------------------------------------------------------------
 # Systemd Implementation (Debian / Ubuntu / VPS)
 # -----------------------------------------------------------------------------
-  # Underlying service is managed independently by managed_service
-
 - name: "[Managed Timer: Systemd] Render timer unit"
   become: true
   ansible.builtin.template:
@@ -75,3 +86,51 @@
   when:
     - managed_timer_init_system == 'openrc'
     - not ansible_check_mode
+
+# -----------------------------------------------------------------------------
+# Darwin Implementation (macOS launchd LaunchAgent)
+# -----------------------------------------------------------------------------
+- name: "[Managed Timer: Darwin] Resolve LaunchAgent plist destination"
+  delegate_to: "{{ timer_delegate_to | default('localhost') }}"
+  ansible.builtin.set_fact:
+    managed_timer_darwin_plist: "{{ (lookup('env', 'HOME')) }}/Library/LaunchAgents/{{ timer_name }}.plist"
+  when: managed_timer_init_system == 'darwin'
+
+- name: "[Managed Timer: Darwin] Ensure LaunchAgents directory exists"
+  delegate_to: "{{ timer_delegate_to | default('localhost') }}"
+  ansible.builtin.file:
+    path: "{{ managed_timer_darwin_plist | dirname }}"
+    state: directory
+    mode: "0755"
+  when: managed_timer_init_system == 'darwin'
+
+- name: "[Managed Timer: Darwin] Render LaunchAgent plist"
+  delegate_to: "{{ timer_delegate_to | default('localhost') }}"
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../../common/templates/darwin_managed_launchagent.j2"
+    dest: "{{ managed_timer_darwin_plist }}"
+    mode: "0644"
+  register: managed_timer_darwin_unit
+  when:
+    - managed_timer_init_system == 'darwin'
+    - timer_enabled | default(true) | bool
+
+- name: "[Managed Timer: Darwin] Manage LaunchAgent state"
+  delegate_to: "{{ timer_delegate_to | default('localhost') }}"
+  ansible.builtin.shell: |
+    launchctl unload "{{ managed_timer_darwin_plist }}" 2>/dev/null || true
+    {% if timer_enabled | default(true) | bool and timer_state | default('started') != 'stopped' %}
+    launchctl load -w "{{ managed_timer_darwin_plist }}"
+    {% endif %}
+  when:
+    - managed_timer_init_system == 'darwin'
+    - not ansible_check_mode
+
+- name: "[Managed Timer: Darwin] Remove LaunchAgent plist when disabled"
+  delegate_to: "{{ timer_delegate_to | default('localhost') }}"
+  ansible.builtin.file:
+    path: "{{ managed_timer_darwin_plist }}"
+    state: absent
+  when:
+    - managed_timer_init_system == 'darwin'
+    - not (timer_enabled | default(true) | bool)
