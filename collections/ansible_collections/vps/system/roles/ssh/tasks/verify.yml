@@ -91,7 +91,9 @@
   ansible.builtin.assert:
     that:
       - "'port ' ~ (ssh_port | string) in ssh_verify_effective_config.stdout"
-      - "'permitrootlogin ' ~ ssh_permit_root_login in ssh_verify_effective_config.stdout"
+      - >-
+        ('permitrootlogin ' ~ ssh_permit_root_login in ssh_verify_effective_config.stdout)
+        or (ssh_permit_root_login == 'prohibit-password' and 'permitrootlogin without-password' in ssh_verify_effective_config.stdout)
       - "'passwordauthentication ' ~ ssh_password_authentication in ssh_verify_effective_config.stdout"
       - "'pubkeyauthentication ' ~ ssh_pubkey_authentication in ssh_verify_effective_config.stdout"
       - "'clientaliveinterval ' ~ (ssh_client_alive_interval | string) in ssh_verify_effective_config.stdout"

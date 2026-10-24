@@ -127,13 +127,14 @@
 - name: Fail loud when changing ssh port behind active ufw without allow rule
   ansible.builtin.assert:
     that:
-      - not ssh_port_changed
       - >
+        (not ssh_port_changed)
+        or
         (ssh_ufw_binary_check.rc != 0)
         or
         ('Status: active' not in (ssh_ufw_status.stdout | default('')))
         or
-        ((ssh_ufw_status.stdout | default('') | regex_search((ssh_port | string) ~ '(/tcp)?\\s+ALLOW')) is not none)
+        ((ssh_ufw_status.stdout | default('') | regex_search((ssh_port | string) ~ '(/tcp)?\s+ALLOW')) is not none)
     fail_msg: >-
       ssh_port is changing from {{ ssh_current_effective_port }} to {{ ssh_port }},
       but active ufw does not already allow the new port. Run the firewall lifecycle
