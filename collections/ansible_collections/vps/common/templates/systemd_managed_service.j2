@@ -17,6 +17,21 @@ EnvironmentFile={{ service_environment_file }}
 ExecStart={{ service_exec_start }}
 Restart={{ service_restart | default('on-failure') }}
 RestartSec={{ service_restart_sec | default(5) }}
+{% if service_nice is defined and service_nice %}
+Nice={{ service_nice }}
+{% endif %}
+{% if service_cpu_weight is defined and service_cpu_weight %}
+CPUWeight={{ service_cpu_weight }}
+{% endif %}
+{% if service_io_weight is defined and service_io_weight %}
+IOWeight={{ service_io_weight }}
+{% endif %}
+{% if service_ioscheduling_class is defined and service_ioscheduling_class %}
+IOSchedulingClass={{ service_ioscheduling_class }}
+{% endif %}
+{% if service_ioscheduling_priority is defined and service_ioscheduling_priority %}
+IOSchedulingPriority={{ service_ioscheduling_priority }}
+{% endif %}
 {% if service_environment is defined and service_environment is mapping %}
 {% for k, v in service_environment.items() %}
 Environment="{{ k }}={{ v }}"

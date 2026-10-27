@@ -102,8 +102,24 @@
   register: verify_phase0_output
   changed_when: false
   tags: [verify, system, base, base_verify_phase0, phase0]
-
 - name: 显示系统基线验证结果
   ansible.builtin.debug:
     var: verify_phase0_output.stdout_lines
   tags: [verify, system, base, base_verify_phase0, phase0]
+
+- name: 验证 systemd-logind 电源键策略 drop-in (如配置)
+  become: true
+  block:
+    - name: 读取 logind 电源键 drop-in
+      ansible.builtin.slurp:
+        path: /etc/systemd/logind.conf.d/10-ignore-power-key.conf
+      register: _logind_powerkey_raw
+
+    - name: 断言电源键策略内容
+      ansible.builtin.assert:
+        that:
+          - '"HandlePowerKey={{ base_logind_handle_power_key }}" in (_logind_powerkey_raw.content | b64decode)'
+          - '"HandlePowerKeyLongPress={{ base_logind_handle_power_key }}" in (_logind_powerkey_raw.content | b64decode)'
+        fail_msg: "systemd-logind 电源键策略 drop-in 内容不匹配"
+  when: base_logind_handle_power_key | default('') | length > 0
+  tags: [verify, system, base, base_verify_logind, phase0]
