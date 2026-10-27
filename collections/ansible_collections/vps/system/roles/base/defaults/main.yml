@@ -16,3 +16,10 @@ dns_servers:
   - 1.1.1.1  # Cloudflare
   - 8.8.4.4  # Google
   - 1.0.0.1  # Cloudflare
+
+# HandlePowerKey policy (systemd-logind). Empty = leave the distribution default
+# untouched. Set to 'ignore' on hosts whose virtualization/console layer emits
+# spurious ACPI power-key events that would otherwise shut the server down
+# (cc15 incident). When set, it is applied to both HandlePowerKey and
+# HandlePowerKeyLongPress via a drop-in under /etc/systemd/logind.conf.d.
+base_logind_handle_power_key: ""
