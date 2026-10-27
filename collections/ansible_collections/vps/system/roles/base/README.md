@@ -10,6 +10,7 @@
 | `system_locale` | `en_US.UTF-8` | 系统语言和字符编码设置。 |
 | `ntp_servers` | `[0.debian.pool.ntp.org, ...]` | NTP 时间同步服务器列表（Debian Pool）。 |
 | `dns_servers` | `[8.8.8.8, 1.1.1.1, ...]` | `/etc/resolv.conf` DNS 列表，默认混合 Google 与 Cloudflare 以提高可用性。 |
+| `base_logind_handle_power_key` | `""` | 可选 logind 电源键策略 (`ignore`/`poweroff` 等)。非空时写入 `/etc/systemd/logind.conf.d/10-ignore-power-key.conf` 覆盖 `HandlePowerKey` 与 `HandlePowerKeyLongPress`，防止云平台 ACPI 信号意外关机。 |
 
 ## 3. 内部逻辑
 - **本地化**: 设置时区和生成指定的 locale。
