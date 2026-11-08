@@ -2,7 +2,7 @@
 ssh_fact_path: /etc/ansible/facts.d/ssh.fact
 ssh_main_config_path: /etc/ssh/sshd_config
 ssh_managed_dropin_dir: /etc/ssh/sshd_config.d
-ssh_managed_dropin_path: /etc/ssh/sshd_config.d/99-ansible.conf
+ssh_managed_dropin_path: /etc/ssh/sshd_config.d/05-ansible.conf
 ssh_package_name: openssh-server
 
 # Ansible 连接参数 (动态复用 ssh_port)

@@ -83,11 +83,19 @@
     insertbefore: BOF
   notify: Restart sshd
   tags: [deploy, system, ssh, phase1]
+- name: Remove legacy ssh drop-in from previous 99-ansible path
+  become: true
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d/99-ansible.conf
+    state: absent
+  when: ssh_managed_dropin_path != '/etc/ssh/sshd_config.d/99-ansible.conf'
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
 
 - name: Deploy managed ssh drop-in configuration
   become: true
   ansible.builtin.template:
-    src: 99-ansible.conf.j2
+    src: 05-ansible.conf.j2
     dest: "{{ ssh_managed_dropin_path }}"
     owner: root
     group: root

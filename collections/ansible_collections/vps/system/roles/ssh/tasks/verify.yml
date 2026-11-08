@@ -77,6 +77,19 @@
   loop_control:
     label: "{{ item.item }}"
   tags: [verify, system, ssh, phase1]
+- name: Check legacy ssh drop-in absence (pre-rename 99-ansible.conf)
+  become: true
+  ansible.builtin.stat:
+    path: /etc/ssh/sshd_config.d/99-ansible.conf
+  register: ssh_legacy_dropin_stat
+  tags: [verify, system, ssh, phase1]
+
+- name: Assert legacy ssh drop-in is absent
+  ansible.builtin.assert:
+    that:
+      - not ssh_legacy_dropin_stat.stat.exists
+    fail_msg: "legacy 99-ansible.conf is still present; run deploy-system.ssh to migrate"
+  tags: [verify, system, ssh, phase1]
 
 - name: Verify sshd syntax
   become: true
