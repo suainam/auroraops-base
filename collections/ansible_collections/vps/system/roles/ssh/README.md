@@ -22,7 +22,7 @@
 
 ## 3. 内部逻辑
 1.  **清理遗留**: 自动检测并删除直接写入 `/etc/ssh/sshd_config` 的旧配置行。
-2.  **模块化配置**: 将所有自定义配置渲染至 `/etc/ssh/sshd_config.d/99-ansible.conf`。
+2.  **模块化配置**: 将所有自定义配置渲染至 `/etc/ssh/sshd_config.d/05-ansible.conf`（低前缀序号，确保在 OpenSSH 首值生效语义下先于托管商 drop-in）。
 3.  **配置生效**: 确保主配置文件包含 (`Include`) `.d` 目录下的配置。
 4.  **验证**: 使用 `sshd -T` 验证配置语法的正确性以及关键参数的最终生效值。
 
@@ -111,7 +111,7 @@ journalctl -u ssh -n 20
 ### 配置文件位置
 
 - **主配置文件**：`/etc/ssh/sshd_config`（保持默认，不直接修改）
-- **Ansible 覆盖**：`/etc/ssh/sshd_config.d/99-ansible.conf`（由本角色管理）
+- **Ansible 覆盖**：`/etc/ssh/sshd_config.d/05-ansible.conf`（由本角色管理）
 - **全局变量**：`inventories/group_vars/all/ssh.yml`
 - **主机变量**：`inventories/host_vars/<host>.yml`
 
