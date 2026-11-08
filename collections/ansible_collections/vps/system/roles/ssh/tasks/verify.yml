@@ -43,12 +43,16 @@
   become: true
   ansible.builtin.service_facts:
   tags: [verify, system, ssh, phase1]
+- name: Resolve ssh service fact key (systemd .service vs OpenRC)
+  ansible.builtin.set_fact:
+    ssh_service_fact_key: "{{ ssh_service_name if ssh_service_name in ansible_facts.services else (ssh_service_name ~ '.service') }}"
+  tags: [verify, system, ssh, phase1]
 
 - name: Assert ssh service is running and enabled
   ansible.builtin.assert:
     that:
-      - ansible_facts.services[ssh_service_name ~ '.service'].state == 'running'
-      - ansible_facts.services[ssh_service_name ~ '.service'].status == 'enabled'
+      - ansible_facts.services[ssh_service_fact_key].state == 'running'
+      - ansible_facts.services[ssh_service_fact_key].status == 'enabled'
     fail_msg: "ssh service is not running and enabled"
   tags: [verify, system, ssh, phase1]
 

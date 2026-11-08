@@ -140,6 +140,10 @@
       but active ufw does not already allow the new port. Run the firewall lifecycle
       first or pre-open the port before changing ssh.
   tags: [deploy, system, ssh, phase1]
+- name: Resolve ssh service fact key (systemd .service vs OpenRC)
+  ansible.builtin.set_fact:
+    ssh_service_fact_key: "{{ ssh_service_name if ssh_service_name in ansible_facts.services else (ssh_service_name ~ '.service') }}"
+  tags: [deploy, system, ssh, phase1]
 
 - name: Build ssh preflight summary
   ansible.builtin.set_fact:
@@ -149,8 +153,8 @@
       main_config_content: "{{ (ssh_main_config_raw.content | b64decode) if (ssh_main_config_raw is defined and ssh_main_config_raw.content is defined) else '' }}"
       managed_dropin_exists: "{{ ssh_managed_dropin_stat.stat.exists | default(false) }}"
       managed_dropin_content: "{{ (ssh_managed_dropin_raw.content | b64decode) if (ssh_managed_dropin_raw is defined and ssh_managed_dropin_raw.content is defined) else '' }}"
-      service_enabled: "{{ ansible_facts.services[ssh_service_name ~ '.service'].status | default('enabled') == 'enabled' }}"
-      service_running: "{{ ansible_facts.services[ssh_service_name ~ '.service'].state | default('running') == 'running' }}"
+      service_enabled: "{{ ansible_facts.services[ssh_service_fact_key].status | default('enabled') == 'enabled' }}"
+      service_running: "{{ ansible_facts.services[ssh_service_fact_key].state | default('running') == 'running' }}"
       effective_config: "{{ ssh_effective_config.stdout }}"
       current_effective_port: "{{ ssh_current_effective_port }}"
       port_changed: "{{ ssh_port_changed }}"
