@@ -51,7 +51,7 @@
 - name: Assert ssh service is running and enabled
   ansible.builtin.assert:
     that:
-      - ansible_facts.services[ssh_service_fact_key].state == 'running'
+      - ansible_facts.services[ssh_service_fact_key].state in ['running', 'started']
       - ansible_facts.services[ssh_service_fact_key].status == 'enabled'
     fail_msg: "ssh service is not running and enabled"
   tags: [verify, system, ssh, phase1]

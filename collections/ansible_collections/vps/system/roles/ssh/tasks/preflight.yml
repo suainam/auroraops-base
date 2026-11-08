@@ -154,7 +154,7 @@
       managed_dropin_exists: "{{ ssh_managed_dropin_stat.stat.exists | default(false) }}"
       managed_dropin_content: "{{ (ssh_managed_dropin_raw.content | b64decode) if (ssh_managed_dropin_raw is defined and ssh_managed_dropin_raw.content is defined) else '' }}"
       service_enabled: "{{ ansible_facts.services[ssh_service_fact_key].status | default('enabled') == 'enabled' }}"
-      service_running: "{{ ansible_facts.services[ssh_service_fact_key].state | default('running') == 'running' }}"
+      service_running: "{{ ansible_facts.services[ssh_service_fact_key].state | default('stopped') in ['running', 'started'] }}"
       effective_config: "{{ ssh_effective_config.stdout }}"
       current_effective_port: "{{ ssh_current_effective_port }}"
       port_changed: "{{ ssh_port_changed }}"
