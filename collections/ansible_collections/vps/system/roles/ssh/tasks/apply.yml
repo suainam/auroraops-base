@@ -83,24 +83,43 @@
     insertbefore: BOF
   notify: Restart sshd
   tags: [deploy, system, ssh, phase1]
-- name: Remove legacy ssh drop-in from previous 99-ansible path
-  become: true
-  ansible.builtin.file:
-    path: /etc/ssh/sshd_config.d/99-ansible.conf
-    state: absent
-  when: ssh_managed_dropin_path != '/etc/ssh/sshd_config.d/99-ansible.conf'
-  notify: Restart sshd
-  tags: [deploy, system, ssh, phase1]
 
 - name: Deploy managed ssh drop-in configuration
   become: true
   ansible.builtin.template:
-    src: 05-ansible.conf.j2
+    src: 99-ansible.conf.j2
     dest: "{{ ssh_managed_dropin_path }}"
     owner: root
     group: root
     mode: "0644"
     validate: "/usr/sbin/sshd -t -f %s"
+  notify: Restart sshd
+  tags: [deploy, system, ssh, phase1]
+- name: List foreign ssh drop-ins (non-managed)
+  become: true
+  ansible.builtin.find:
+    path: "{{ ssh_managed_dropin_dir }}"
+    patterns: "*.conf"
+  register: ssh_foreign_dropin_files
+  tags: [deploy, system, ssh, phase1]
+
+- name: Read foreign ssh drop-ins for policy conflict scan
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ ssh_foreign_dropin_files.files | selectattr('path', 'ne', ssh_managed_dropin_path) | list }}"
+  register: ssh_foreign_dropin_contents
+  tags: [deploy, system, ssh, phase1]
+
+- name: Purge foreign ssh drop-ins overriding PermitRootLogin/PasswordAuthentication
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.item.path }}"
+    state: absent
+  loop: "{{ ssh_foreign_dropin_contents.results }}"
+  when: >
+    ('PermitRootLogin' in (item.content | default('') | b64decode))
+    or ('PasswordAuthentication' in (item.content | default('') | b64decode))
   notify: Restart sshd
   tags: [deploy, system, ssh, phase1]
 
